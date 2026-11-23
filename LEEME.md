@@ -19,7 +19,14 @@ Página estática (HTML/CSS/JS, sin compilar). Se puede publicar en GitHub Pages
 - Ojo: el bloqueo es de la página (front-end). Sirve para animar a registrarse, pero alguien con conocimientos
   técnicos podría saltárselo. Para contenido de pago haría falta un servidor.
 
-## Publicar y sacar el link
+## Publicado
+- Link: https://josephxd184.github.io/altoq/
+- Repositorio: https://github.com/JosephXD184/altoq (GitHub Pages, rama `main`)
+- Firebase: proyecto `altoq-befde` (correo/contraseña y Google activos; dominio `josephxd184.github.io` autorizado).
+- Para publicar cambios: `git add -A`, `git commit -m "..."`, `git push`. En ~1 minuto se actualiza el link.
+  Sube el número `?v=` en `index.html` (y en el import de `model.js` en `app.js`) para que los navegadores bajen la versión nueva.
+
+## Publicar y sacar el link (referencia)
 1. **Firebase (cuentas reales):** crea el proyecto, agrega una app Web y copia la configuración en `config.js`.
    En *Authentication → Sign-in method* activa **Correo/contraseña** y **Google**.
 2. **Hosting (el link):** la forma más simple es https://app.netlify.com/drop → arrastra la carpeta del proyecto →
