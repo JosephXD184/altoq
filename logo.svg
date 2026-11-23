@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 130" role="img" aria-label="ALTOQ">
+  <g transform="translate(90,10) skewX(-12)">
+    <g stroke="#FF7A00" stroke-width="12" stroke-linecap="round">
+      <line x1="-70" y1="28" x2="-14" y2="28"/>
+      <line x1="-55" y1="50" x2="-14" y2="50"/>
+      <line x1="-40" y1="72" x2="-14" y2="72"/>
+    </g>
+    <g fill="#FFFFFF">
+      <path fill-rule="evenodd" d="M0 100 L28 0 L52 0 L80 100 L58 100 L52 78 L28 78 L22 100 Z M33 58 L47 58 L40 30 Z"/>
+      <path d="M88 0 H110 V80 H150 V100 H88 Z"/>
+      <path d="M154 0 H226 V22 H201 V100 H179 V22 H154 Z"/>
+      <rect x="243" y="11" width="68" height="78" rx="24" fill="none" stroke="#FFFFFF" stroke-width="22"/>
+    </g>
+    <rect x="339" y="11" width="68" height="78" rx="24" fill="none" stroke="#FF7A00" stroke-width="22"/>
+    <path fill="#FF7A00" d="M368 66 H394 L430 110 H404 Z"/>
+  </g>
+</svg>

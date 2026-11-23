@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ALTOQ · Marca</title>
+<link rel="icon" href="icon.svg">
+<style>
+  :root{--bg:#f4f4f4;--ink:#0a0a0a;--mut:#666;--orange:#ff7a00}
+  *{box-sizing:border-box;margin:0}
+  body{font-family:system-ui,"Segoe UI",sans-serif;background:var(--bg);color:var(--ink);padding:32px 16px}
+  main{max-width:960px;margin:auto;display:grid;gap:16px}
+  h1{font-size:22px} h2{font-size:14px;color:var(--mut);font-weight:600;margin-bottom:12px;letter-spacing:.04em}
+  .row{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .tile{border-radius:16px;padding:40px 24px;display:flex;align-items:center;justify-content:center;min-height:200px}
+  .black{background:#0a0a0a}.white{background:#fff;border:1px solid #ddd}.orange{background:var(--orange)}
+  .tile img{max-width:100%;height:auto}
+  .swatches{display:flex;gap:12px;flex-wrap:wrap}
+  .sw{width:150px;border-radius:12px;overflow:hidden;border:1px solid #ddd;background:#fff;font-size:13px}
+  .sw div{height:70px}.sw p{padding:8px 10px}
+  .polo{position:relative;width:260px;height:280px}
+  .polo svg{position:absolute;inset:0}
+  .chest{position:absolute;left:150px;top:92px;width:46px}
+  @media(max-width:640px){.row{grid-template-columns:1fr}}
+</style>
+</head>
+<body><main>
+  <h1>ALTOQ · hoja de marca</h1>
+  <section><h2>LOGO PRINCIPAL</h2>
+    <div class="row">
+      <div class="tile black"><img src="logo.svg" alt="ALTOQ sobre negro" width="420"></div>
+      <div class="tile white"><img src="logo-dark.svg" alt="ALTOQ sobre blanco" width="420"></div>
+    </div>
+  </section>
+  <section><h2>ÍCONO (app, redes, favicon, pecho del polo)</h2>
+    <div class="row">
+      <div class="tile white" style="gap:24px"><img src="icon.svg" width="160" alt="Ícono"><img src="icon.svg" width="64" alt=""><img src="icon.svg" width="32" alt=""></div>
+      <div class="tile white">
+        <div class="polo">
+          <svg viewBox="0 0 260 280"><path d="M70 20 L105 10 Q130 30 155 10 L190 20 L250 70 L220 110 L195 92 L195 270 L65 270 L65 92 L40 110 L10 70 Z" fill="#0a0a0a"/><path d="M105 10 Q130 30 155 10 L148 8 Q130 22 112 8 Z" fill="#ff7a00"/><path d="M118 18 L130 60 L142 18" fill="none" stroke="#222" stroke-width="2"/></svg>
+          <img class="chest" src="icon.svg" alt="Ícono en el pecho del polo">
+        </div>
+      </div>
+    </div>
+  </section>
+  <section><h2>COLORES</h2>
+    <div class="swatches">
+      <div class="sw"><div style="background:#0a0a0a"></div><p><b>Negro ALTOQ</b><br>#0A0A0A</p></div>
+      <div class="sw"><div style="background:#ff7a00"></div><p><b>Naranja ALTOQ</b><br>#FF7A00</p></div>
+      <div class="sw"><div style="background:#ffffff;border-bottom:1px solid #ddd"></div><p><b>Blanco</b><br>#FFFFFF</p></div>
+    </div>
+  </section>
+  <section><h2>IDEA</h2>
+    <p style="max-width:640px;line-height:1.6">Letras en cursiva = movimiento. Tres líneas de velocidad = “al toque”. La Q en naranja es la firma: sola funciona como ícono, igual que un símbolo de marca deportiva. Lema: <b>“Ponte ALTOQ.”</b></p>
+  </section>
+</main></body>
+</html>
