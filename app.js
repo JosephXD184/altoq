@@ -1,5 +1,5 @@
 // ALTOQ · login con Google (Firebase), cuotas en tiempo real (The Odds API) y detector de valor (EV+).
-import { modelFor, pendingReason, summaryFor, logPrediction, settleResults, registryStats } from './model.js?v=3';
+import { modelFor, pendingReason, summaryFor, logPrediction, settleResults, registryStats } from './model.js?v=4';
 const CFG = window.RUSHTOP_CONFIG || {};
 const TZ = 'America/Lima';
 const $ = (s) => document.querySelector(s);
@@ -519,6 +519,7 @@ function viewDetail() {
   if (ai < 0) return `<div class="dtop"><button class="icon-btn" data-act="back">‹</button></div><div class="card empty">Este partido ya no está en la lista.</div>`;
   const a = S.analysis[ai], ev = a.ev;
   if (!ev.path) return detailHeader(ev) + `<div class="card empty">El detalle completo usa datos de ESPN.</div>`;
+  if (S.detail.player) return isGuest() ? detailHeader(ev) + lockCard('Perfil completo del jugador, línea ajustable y boleto') : playerProfile();
   const body = S.detail.tab === 'partido' ? partidoTab(a, ai) : playersTab(a, S.detail.tab);
   return detailHeader(ev) + body;
 }
@@ -794,93 +795,331 @@ function marketsSection(a, ai) {
   return `<div class="sec"><h4>OTROS MERCADOS</h4><span class="mut tiny">${esc(ev.provider || '')}</span></div><div class="mks">${cells.join('')}${tt}</div>`;
 }
 
-// ----- Pestañas de jugadores (NBA) -----
+// ----- Jugadores (NBA): mercados, proyección del partido y línea ajustable -----
 const glogUrl = (path, id) => `https://site.web.api.espn.com/apis/common/v3/sports/${path}/athletes/${id}/gamelog`;
 const STATS = {
-  PTS: { label: 'Puntos', f: (s) => s.points },
-  REB: { label: 'Rebotes', f: (s) => s.totalRebounds },
-  AST: { label: 'Asistencias', f: (s) => s.assists },
-  '3PM': { label: 'Triples', f: (s) => s.threes },
-  PRA: { label: 'Pts+Reb+Ast', f: (s) => s.points + s.totalRebounds + s.assists },
+  PTS: { label: 'Puntos', short: 'PTS', f: (s) => s.points },
+  REB: { label: 'Rebotes', short: 'REB', f: (s) => s.reb },
+  AST: { label: 'Asistencias', short: 'AST', f: (s) => s.ast },
+  '3PM': { label: 'Triples anotados', short: '3PM', f: (s) => s.tpm },
+  '3PA': { label: 'Triples intentados', short: '3PA', f: (s) => s.tpa },
+  PRA: { label: 'Pts+Reb+Ast', short: 'PRA', f: (s) => s.points + s.reb + s.ast },
+  PR: { label: 'Pts+Reb', short: 'PR', f: (s) => s.points + s.reb },
+  PA: { label: 'Pts+Ast', short: 'PA', f: (s) => s.points + s.ast },
+  RA: { label: 'Reb+Ast', short: 'RA', f: (s) => s.reb + s.ast },
+  STL: { label: 'Robos', short: 'ROB', f: (s) => s.stl },
+  BLK: { label: 'Tapones', short: 'TAP', f: (s) => s.blk },
+  TO: { label: 'Pérdidas', short: 'PER', f: (s) => s.to },
 };
-// Partidos de temporada regular de un jugador: [{date, oppId, home, min, points, ...}]
-function playerGames(path, id) {
-  const j = peek('glog', id); if (!j) return j;
-  const names = j.names || [];
-  const st = (j.seasonTypes || []).find((s) => /regular/i.test(s.displayName)) || (j.seasonTypes || [])[0];
-  if (!st) return [];
-  const out = [];
-  for (const c of st.categories || []) if (c.type === 'event') for (const e of c.events || []) {
-    const meta = j.events?.[e.eventId]; if (!meta) continue;
-    const v = {}; names.forEach((n, i) => (v[n] = e.stats[i]));
-    out.push({ date: meta.gameDate, oppId: meta.opponent?.id, home: meta.atVs !== '@', min: +v.minutes || 0, points: +v.points || 0, totalRebounds: +v.totalRebounds || 0, assists: +v.assists || 0, threes: parseInt(v['threePointFieldGoalsMade-threePointFieldGoalsAttempted']) || 0 });
-  }
-  return out.filter((g) => g.min > 0).sort((a, b) => new Date(a.date) - new Date(b.date));
-}
+const mean = (a) => (a.length ? a.reduce((t, x) => t + x, 0) / a.length : null);
 function playerAvg(path, id, stat) {
   const g = playerGames(path, id); if (!g || !g.length) return null;
-  return g.reduce((t, x) => t + STATS[stat].f(x), 0) / g.length;
+  return mean(g.map((x) => STATS[stat].f(x)));
 }
-function defRanks(path) {
+function defTable(path) {
   const j = need('stand', path, `https://site.api.espn.com/apis/v2/sports/${path}/standings`);
   if (!j) return null;
   const rows = [];
   for (const ch of j.children || []) for (const e of ch.standings?.entries || []) {
-    const pa = e.stats?.find((s) => s.name === 'avgPointsAgainst')?.value; if (pa != null) rows.push([e.team.id, pa]);
+    const pa = e.stats?.find((s) => s.name === 'avgPointsAgainst')?.value; if (pa != null) rows.push([String(e.team.id), pa]);
   }
   rows.sort((a, b) => b[1] - a[1]); // 1.º = la que más puntos permite (mejor para el "Más")
-  return Object.fromEntries(rows.map(([id], i) => [String(id), i + 1]));
+  const league = mean(rows.map((r) => r[1]));
+  return { rank: Object.fromEntries(rows.map(([id], i) => [id, i + 1])), pa: Object.fromEntries(rows), league };
 }
+function defRanks(path) { return defTable(path)?.rank || null; }
+
+// Proyección para ESTE partido:
+//  base = 40 % últimos 5 + 35 % últimos 10 + 25 % temporada
+//  × rival: puntos que permite el rival frente a la media de la liga (efecto a la mitad)
+//  × casa/fuera: su rendimiento como local o visitante frente a su media (efecto a la mitad, si hay ≥3 partidos)
+function projectPlayer(g, stat, oppId, isHome, dt) {
+  const vals = g.map((x) => STATS[stat].f(x));
+  const season = mean(vals), l5 = mean(vals.slice(-5)), l10 = mean(vals.slice(-10));
+  const base = 0.4 * l5 + 0.35 * l10 + 0.25 * season;
+  let fOpp = 1, fHA = 1;
+  if (dt && dt.pa[String(oppId)] && dt.league) fOpp = 1 + 0.5 * (dt.pa[String(oppId)] / dt.league - 1);
+  const side = g.filter((x) => x.home === isHome).map((x) => STATS[stat].f(x));
+  if (side.length >= 3 && season > 0) fHA = 1 + 0.5 * (mean(side) / season - 1);
+  const proj = Math.max(0, base * fOpp * fHA);
+  const sd = Math.sqrt(mean(vals.map((v) => (v - season) ** 2)) || 0);
+  return { proj, base, l5, l10, season, fOpp, fHA, sd, n: vals.length, vals };
+}
+const suggestLine = (proj) => Math.max(0.5, Math.floor(proj) + 0.5);
+// Probabilidad de superar la línea: Poisson para estadísticas pequeñas, Normal para el resto
+function poissonCdf(k, l) { let p = Math.exp(-l), s = p; for (let i = 1; i <= k; i++) { p *= l / i; s += p; } return s; }
+function normCdf(z) { const t = 1 / (1 + 0.2316419 * Math.abs(z)); const d = 0.3989423 * Math.exp(-z * z / 2); const p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274)))); return z > 0 ? 1 - p : p; }
+function probOver(pr, line) {
+  const { proj, sd } = pr;
+  if (proj < 8) { // conteo pequeño: Poisson
+    const k = Math.floor(line);
+    const pAtMost = poissonCdf(k, proj);
+    const pPush = Number.isInteger(line) ? poissonCdf(k, proj) - (k > 0 ? poissonCdf(k - 1, proj) : 0) : 0;
+    return { over: 1 - pAtMost, under: pAtMost - pPush, push: pPush };
+  }
+  const s = Math.max(sd, Math.sqrt(proj), 1);
+  const over = 1 - normCdf((line + (Number.isInteger(line) ? 0.5 : 0) - proj) / s);
+  const under = normCdf((line - (Number.isInteger(line) ? 0.5 : 0) - proj) / s);
+  return { over, under, push: Math.max(0, 1 - over - under) };
+}
+const fmtL = (x) => String(x).replace('.', ',');
+const rateAt = (arr, line, side) => (arr.length ? arr.filter((v) => (side === 'under' ? v < line : v > line)).length / arr.length : null);
+const rateCls = (r) => (r == null ? '' : r >= 0.6 ? 'good' : r <= 0.4 ? 'bad' : 'warn');
+
 function playersTab(a, side) {
   const ev = a.ev;
-  if (isGuest()) return lockCard('Estadísticas de jugadores: % sobre la línea en temporada, H2H, L5, L10, L20 y defensa rival');
+  if (isGuest()) return lockCard('Estadísticas de jugadores: proyección del partido, línea ajustable y % de acierto');
   if (!isNBA(ev)) return `<div class="card empty">Las estadísticas de jugadores por ahora están disponibles para la NBA.</div>`;
   const teamId = side === 'home' ? ev.home_id : ev.away_id, oppId = side === 'home' ? ev.away_id : ev.home_id;
   const abbr = side === 'home' ? ev.home_abbr : ev.away_abbr, logo = side === 'home' ? ev.home_logo : ev.away_logo;
   const roster = need('roster', teamId, `${espnBase(ev.path)}/teams/${teamId}/roster`);
   const stat = (S.detail.stat ||= 'PTS');
-  const tabs = `<div class="seg wrap" style="margin:14px 0">${Object.entries(STATS).map(([k, v]) => `<button data-stat="${k}" class="${k === stat ? 'on' : ''}">${v.label}</button>`).join('')}</div>`;
+  const tabs = statTabs(stat);
   if (!roster) return tabs + `<div class="card empty">${roster === null ? 'Plantilla no disponible.' : 'Cargando plantilla…'}</div>`;
   const athletes = roster.athletes || [];
   athletes.forEach((p) => need('glog', p.id, glogUrl(ev.path, p.id)));
-  const ranks = defRanks(ev.path);
+  const dt = defTable(ev.path);
   const sum = peek('sum', ev.id);
   const injured = new Map((sum?.injuries || []).flatMap((t) => (t.injuries || []).map((x) => [String(x.athlete?.id), INJ_ES[x.status] || x.status])));
   const loading = athletes.filter((p) => peek('glog', p.id) === undefined).length;
   const rows = athletes.map((p) => {
     const g = playerGames(ev.path, p.id); if (!g || g.length < 3) return null;
-    const avgMin = g.reduce((t, x) => t + x.min, 0) / g.length; if (avgMin < 12) return null;
-    const vals = g.map((x) => STATS[stat].f(x));
-    const avg = vals.reduce((t, x) => t + x, 0) / vals.length;
-    const line = Math.max(0.5, Math.round(avg) - 0.5);
-    const rate = (arr) => (arr.length ? arr.filter((v) => v > line).length / arr.length : null);
+    if (mean(g.map((x) => x.min)) < 12) return null;
+    const pr = projectPlayer(g, stat, oppId, side === 'home', dt);
+    const line = S.detail.lines?.[p.id + '|' + stat] ?? suggestLine(pr.proj);
     const h2h = g.filter((x) => String(x.oppId) === String(oppId)).map((x) => STATS[stat].f(x));
-    return { p, avg, line, n: g.length, last: vals.slice(-10), season: rate(vals), h2h: rate(h2h), l5: rate(vals.slice(-5)), l10: rate(vals.slice(-10)), l20: rate(vals.slice(-20)), inj: injured.get(String(p.id)) };
-  }).filter(Boolean).sort((x, y) => y.avg - x.avg);
-  const cls = (r) => (r == null ? '' : r >= 0.6 ? 'good' : r <= 0.4 ? 'bad' : 'warn');
-  const rk = ranks?.[String(oppId)];
-  const cards = rows.map((r) => `<div class="card pcard">
+    const vals = pr.vals;
+    return { p, pr, line, prob: probOver(pr, line), last: vals.slice(-10), season: rateAt(vals, line), h2h: rateAt(h2h, line), l5: rateAt(vals.slice(-5), line), l10: rateAt(vals.slice(-10), line), l20: rateAt(vals.slice(-20), line), inj: injured.get(String(p.id)) };
+  }).filter(Boolean).sort((x, y) => y.pr.proj - x.pr.proj);
+  const rk = dt?.rank?.[String(oppId)];
+  const cards = rows.map((r) => {
+    const mx = Math.max(...r.last, r.line * 1.3);
+    return `<div class="card pcard click" data-pl="${esc(side)}/${esc(r.p.id)}">
     <div class="phead"><div class="ph"><img src="https://a.espncdn.com/i/headshots/nba/players/full/${esc(r.p.id)}.png" alt="" loading="lazy" onerror="this.style.visibility='hidden'">${logo ? `<img class="tl" src="${esc(logo)}" alt="">` : ''}</div>
       <div><b>${esc(r.p.displayName)}</b> <span class="mut tiny">${esc(abbr)} · ${esc(r.p.position?.abbreviation || '')}</span>${r.inj ? ` <span class="chip ${r.inj === 'Baja' ? 'bad' : 'warn'}">${esc(r.inj)}</span>` : ''}
-        <div><span class="acc">Más</span> ${String(r.line).replace('.', ',')} ${STATS[stat].label} <span class="mut tiny">· media ${r.avg.toFixed(1).replace('.', ',')} en ${r.n} partidos</span></div></div>
-      <div class="pq"><span class="mut tiny">CUOTA</span><b>–</b></div><div class="pq"><span class="mut tiny">VALOR</span><b>–</b></div></div>
+        <div><span class="acc">Más</span> ${fmtL(r.line)} ${STATS[stat].label} <span class="mut tiny">· proyección ${num1(r.pr.proj)}</span></div></div>
+      <div class="pq"><span class="mut tiny">PROB. MÁS</span><b class="${rateCls(r.prob.over)}">${pctEs(r.prob.over)}</b></div><div class="pq"><span class="mut tiny">CUOTA JUSTA</span><b>${fmtOdd(1 / r.prob.over)}</b></div></div>
     <div class="rates">
-      <div><span>Temporada</span><b class="${cls(r.season)}">${pctEs(r.season)}</b></div>
-      <div><span>H2H</span><b class="${cls(r.h2h)}">${pctEs(r.h2h)}</b></div>
+      <div><span>Temporada</span><b class="${rateCls(r.season)}">${pctEs(r.season)}</b></div>
+      <div><span>H2H</span><b class="${rateCls(r.h2h)}">${pctEs(r.h2h)}</b></div>
       <div><span>Def. rival</span><b class="${rk == null ? '' : rk <= 10 ? 'good' : rk >= 21 ? 'bad' : 'warn'}">${rk ? rk + '.º' : '–'}</b></div>
-      <div><span>L5</span><b class="${cls(r.l5)}">${pctEs(r.l5)}</b></div>
-      <div class="sel"><span>L10</span><b class="${cls(r.l10)}">${pctEs(r.l10)}</b></div>
-      <div><span>L20</span><b class="${cls(r.l20)}">${pctEs(r.l20)}</b></div>
+      <div><span>L5</span><b class="${rateCls(r.l5)}">${pctEs(r.l5)}</b></div>
+      <div class="sel"><span>L10</span><b class="${rateCls(r.l10)}">${pctEs(r.l10)}</b></div>
+      <div><span>L20</span><b class="${rateCls(r.l20)}">${pctEs(r.l20)}</b></div>
     </div>
-    <div class="spark">${r.last.map((v) => `<i class="${v > r.line ? 'win' : 'loss'}" style="height:${Math.max(6, (v / Math.max(...r.last, r.line * 1.3)) * 100)}%" title="${v}"></i>`).join('')}<em style="bottom:${(r.line / Math.max(...r.last, r.line * 1.3)) * 100}%"></em></div>
-  </div>`).join('');
-  return tabs + `<p class="mut tiny" style="margin-bottom:10px">% = partidos en los que superó la línea. La línea es la media del jugador (ESPN no publica cuotas de jugadores; con The Odds API se podrían añadir). “Def. rival”: puesto del rival en puntos permitidos (1.º = la peor defensa).${loading ? ` Cargando ${loading} jugadores…` : ''}</p>` + (cards || `<div class="card empty">${loading ? 'Cargando jugadores…' : 'Sin datos de jugadores.'}</div>`);
+    <div class="spark">${r.last.map((v) => `<i class="${v > r.line ? 'win' : 'loss'}" style="height:${Math.max(6, (v / mx) * 100)}%" title="${v}"></i>`).join('')}<em style="bottom:${(r.line / mx) * 100}%"></em></div>
+    <div class="pmore">Ver perfil, ajustar línea y agregar al boleto ›</div>
+  </div>`;
+  }).join('');
+  return tabs + `<p class="mut tiny" style="margin-bottom:10px">La línea es la <b>proyección ALTOQ para este partido</b> redondeada a medio punto. Toca un jugador para ver su perfil completo, mover la línea y agregarla a tu boleto. % = partidos en los que superó la línea. “Def. rival”: puesto del rival en puntos permitidos (1.º = la peor defensa).${loading ? ` Cargando ${loading} jugadores…` : ''}</p>` + (cards || `<div class="card empty">${loading ? 'Cargando jugadores…' : 'Sin datos de jugadores.'}</div>`);
+}
+
+// ----- Perfil del jugador (estilo ficha completa) -----
+const STAT_EXTRA = {
+  FGM: { label: 'Tiros de campo anotados', short: 'TC', f: (s) => s.fgm },
+  FGA: { label: 'Tiros de campo intentados', short: 'TCI', f: (s) => s.fga },
+  FTM: { label: 'Tiros libres anotados', short: 'TL', f: (s) => s.ftm },
+  FTA: { label: 'Tiros libres intentados', short: 'TLI', f: (s) => s.fta },
+};
+Object.assign(STATS, STAT_EXTRA);
+const STAT_ORDER = ['PTS', 'REB', 'AST', '3PM', '3PA', 'PRA', 'PR', 'PA', 'RA', 'FGM', 'FGA', 'FTM', 'FTA', 'STL', 'BLK', 'TO'];
+const CHIP = { PRA: 'P+R+A', PR: 'P+R', PA: 'P+A', RA: 'R+A' };
+function statTabs(stat) {
+  return `<div class="chips">${STAT_ORDER.map((k) => `<button data-stat="${k}" class="${k === stat ? 'on' : ''}" title="${esc(STATS[k].label)}">${esc(CHIP[k] || STATS[k].short)}</button>`).join('')}</div>`;
+}
+// Gamelog → partidos (con descanso y back-to-back)
+function parseGlog(j) {
+  if (!j) return j;
+  const names = j.names || [];
+  const st = (j.seasonTypes || []).find((s) => /regular/i.test(s.displayName)) || (j.seasonTypes || [])[0];
+  if (!st) return [];
+  const pair = (v) => String(v || '0-0').split('-').map((x) => parseInt(x) || 0);
+  const out = [];
+  for (const c of st.categories || []) if (c.type === 'event') for (const e of c.events || []) {
+    const meta = j.events?.[e.eventId]; if (!meta) continue;
+    const v = {}; names.forEach((n, i) => (v[n] = e.stats[i]));
+    const [tpm, tpa] = pair(v['threePointFieldGoalsMade-threePointFieldGoalsAttempted']);
+    const [fgm, fga] = pair(v['fieldGoalsMade-fieldGoalsAttempted']);
+    const [ftm, fta] = pair(v['freeThrowsMade-freeThrowsAttempted']);
+    out.push({ date: meta.gameDate, oppId: meta.opponent?.id, opp: meta.opponent?.abbreviation || '', home: meta.atVs !== '@', result: meta.gameResult, score: meta.score,
+      min: +v.minutes || 0, points: +v.points || 0, reb: +v.totalRebounds || 0, ast: +v.assists || 0, tpm, tpa, fgm, fga, ftm, fta,
+      stl: +v.steals || 0, blk: +v.blocks || 0, to: +v.turnovers || 0 });
+  }
+  const g = out.filter((x) => x.min > 0).sort((a, b) => new Date(a.date) - new Date(b.date));
+  g.forEach((x, i) => { const prev = g[i - 1]; x.rest = prev ? Math.max(0, Math.round((new Date(x.date) - new Date(prev.date)) / 864e5) - 1) : null; x.b2b = x.rest === 0; });
+  return g;
+}
+function playerGames(path, id) { return parseGlog(peek('glog', id)); }
+const seasonLabel = (j) => { const d = (j?.seasonTypes || []).find((s) => /regular/i.test(s.displayName))?.displayName || ''; const m = d.match(/(\d{4})-(\d{2})/); return m ? { label: m[1].slice(2) + '-' + m[2], end: 2000 + +m[2] } : null; };
+function prevSeasonGames(path, id) {
+  const cur = seasonLabel(peek('glog', id)); if (!cur) return { games: undefined };
+  const prevEnd = cur.end - 1, key = id + '|' + prevEnd;
+  const j = need('glog', key, glogUrl(path, id) + '?season=' + prevEnd);
+  return { games: parseGlog(j), label: String(prevEnd - 1).slice(2) + '-' + String(prevEnd).slice(2), curLabel: cur.label };
+}
+const median = (a) => { if (!a.length) return null; const s = [...a].sort((x, y) => x - y), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+// Perfil de juego a partir de sus números
+function archetype(g) {
+  const m = (f) => mean(g.map(f)) || 0;
+  const t = [];
+  if (m((x) => x.tpa) >= 6) t.push('Tirador de triples');
+  if (m((x) => x.ast) >= 6.5) t.push('Organizador');
+  if (m((x) => x.reb) >= 9) t.push('Reboteador');
+  if (m((x) => x.points) >= 22) t.push('Anotador');
+  if (m((x) => x.blk) >= 1.5) t.push('Protector del aro');
+  if (m((x) => x.fta) >= 6) t.push('Va mucho a la línea');
+  return t.slice(0, 2);
+}
+// Nota del pick según la probabilidad del modelo
+const grade = (p) => (p >= 0.75 ? 'A+' : p >= 0.68 ? 'A' : p >= 0.62 ? 'B+' : p >= 0.56 ? 'B' : p >= 0.5 ? 'C' : 'D');
+
+function playerCtx() {
+  const ai = S.analysis.findIndex((x) => String(x.ev.id) === String(S.detail.id)); if (ai < 0) return null;
+  const a = S.analysis[ai], ev = a.ev, side = S.detail.pside, pid = S.detail.player;
+  const teamId = side === 'home' ? ev.home_id : ev.away_id, oppId = side === 'home' ? ev.away_id : ev.home_id;
+  const roster = need('roster', teamId, `${espnBase(ev.path)}/teams/${teamId}/roster`);
+  need('glog', pid, glogUrl(ev.path, pid));
+  const p = roster?.athletes?.find((x) => String(x.id) === String(pid));
+  const g = playerGames(ev.path, pid);
+  const stat = (S.detail.stat ||= 'PTS');
+  const dt = defTable(ev.path);
+  const pr = g && g.length ? projectPlayer(g, stat, oppId, side === 'home', dt) : null;
+  const key = pid + '|' + stat;
+  const sugg = pr ? suggestLine(pr.proj) : null;
+  const line = S.detail.lines?.[key] ?? sugg;
+  const pick = S.detail.pick ||= 'over';
+  return { a, ai, ev, side, pid, teamId, oppId, roster, p, g, stat, dt, pr, key, sugg, line, pick };
+}
+function playerProfile() {
+  const c = playerCtx(); if (!c) return `<div class="dtop"><button class="icon-btn" data-act="pback">‹</button></div><div class="card empty">Este partido ya no está en la lista.</div>`;
+  const { ev, side, pid, oppId, p, g, stat, dt, pr, line, pick, sugg } = c;
+  const abbr = side === 'home' ? ev.home_abbr : ev.away_abbr, logo = side === 'home' ? ev.home_logo : ev.away_logo;
+  const oppAbbr = side === 'home' ? ev.away_abbr : ev.home_abbr;
+  const sum = peek('sum', ev.id);
+  const inj = (sum?.injuries || []).flatMap((t) => t.injuries || []).find((x) => String(x.athlete?.id) === String(pid));
+  const name = p?.displayName || inj?.athlete?.displayName || 'Jugador';
+  const top = `<div class="dtop"><button class="icon-btn" data-act="pback">‹</button><b>${esc(name)}</b></div>`;
+  if (g === undefined) return top + `<div class="card empty">Cargando estadísticas…</div>`;
+  if (!g || !g.length) return top + `<div class="card empty">Sin partidos esta temporada.</div>`;
+  const pb = probOver(pr, line), pSel = pick === 'over' ? pb.over : pb.under;
+  const tags = archetype(g);
+  const f = STATS[stat].f, lab = STATS[stat].label.toLowerCase();
+  const prev = prevSeasonGames(ev.path, pid);
+
+  // Filtros del tramo
+  const F = (S.detail.pf ||= { tramo: 'l10', side: 'all', minMin: 0, rest: 'all' });
+  const pass = (x) => (F.side === 'all' || (F.side === 'home' ? x.home : !x.home)) && x.min >= F.minMin && (F.rest === 'all' || (F.rest === 'b2b' ? x.b2b : F.rest === '1' ? x.rest === 1 : x.rest >= 2));
+  const gf = g.filter(pass), pf = (prev.games || []).filter(pass);
+  const sets = {
+    l5: gf.slice(-5), l10: gf.slice(-10), l20: gf.slice(-20),
+    h2h: [...pf, ...gf].filter((x) => String(x.oppId) === String(oppId)),
+    cur: gf, prev: pf,
+  };
+  const hit = (x) => (pick === 'under' ? f(x) < line : f(x) > line);
+  const tile = (k, title) => { const s = sets[k], n = s.length, h = s.filter(hit).length, r = n ? h / n : null; return `<button class="tile ${rateCls(r)} ${F.tramo === k ? 'sel' : ''}" data-tramo="${k}"><span>${title}</span><b>${r == null ? '–' : Math.round(r * 100) + ' %'}</b><small>${h}/${n}</small></button>`; };
+  const tramo = sets[F.tramo] || sets.l10;
+  const tvals = tramo.map(f), hits = tramo.filter(hit).length;
+  const maxV = Math.max(10, ...tvals, line) * 1.12;
+  const H = 210;
+  const rk = dt?.rank?.[String(oppId)];
+  const price = S.detail.price?.[c.key];
+  const evv = price ? pSel * price - 1 : null;
+  const added = getSlip().some((x) => x.id === slipPropId(c));
+  const prevLabel = prev.label || 'Temp. pasada';
+  const curLabel = prev.curLabel || 'Temporada';
+
+  const hero = `<div class="card phero">
+    <div class="ph big"><img src="https://a.espncdn.com/i/headshots/nba/players/full/${esc(pid)}.png" alt="" onerror="this.style.visibility='hidden'">${logo ? `<img class="tl" src="${esc(logo)}" alt="">` : ''}</div>
+    <div class="phinfo"><h3>${esc(name)}</h3>
+      <div class="mut">${esc(abbr)} · ${esc(p?.position?.displayName || p?.position?.abbreviation || '')} · ${side === 'home' ? 'vs' : '@'} ${esc(oppAbbr)} · ${fmtTime(ev.commence_time)} <span class="tiny">(Lima)</span></div>
+      ${tags.length ? `<div class="ptags">${tags.map((t) => `<span>● ${esc(t)}</span>`).join('')}</div>` : ''}
+      ${inj ? `<div style="margin-top:6px"><span class="chip ${INJ_ES[inj.status] === 'Baja' ? 'bad' : 'warn'}">${esc(INJ_ES[inj.status] || inj.status)}</span> <span class="mut tiny">${esc([inj.details?.type, inj.details?.location].filter(Boolean).join(' · '))}</span></div>` : ''}</div>
+    <div class="grade" title="Nota del pick según la probabilidad del modelo">${grade(pSel)}</div>
+  </div>`;
+
+  const controls = `<div class="card pctl">
+    <div class="ctlrow">
+      <div class="seg side"><button data-pick="over" class="${pick === 'over' ? 'on' : ''}">Más de</button><button data-pick="under" class="${pick === 'under' ? 'on' : ''}">Menos de</button></div>
+      <div class="stepper"><button data-line="-0.5">−</button><input id="lineIn" type="number" step="0.5" min="0" value="${line}"><button data-line="0.5">+</button></div>
+      <label class="oddin"><span class="mut">Cuota</span><input id="priceIn" type="number" step="0.01" min="1.01" placeholder="—" value="${price || ''}"></label>
+    </div>
+    <div class="pickrow">
+      <div><h3 class="pickh">${pick === 'over' ? 'Más' : 'Menos'} de ${num1(line)} <small>${esc(lab)}</small></h3>
+        <p class="mut">Proyección ALTOQ para hoy: <b style="color:var(--ink)">${num1(pr.proj)}</b>${line !== sugg ? ` · <button class="linkbtn" data-line="reset">Usar la línea sugerida (${fmtL(sugg)})</button>` : ' · línea sugerida'}</p></div>
+      <button class="btn ${added ? 'ghost' : 'google'} addprop" data-act="propadd">${added ? '✓ En boleto · quitar' : '+ Boleto'}</button>
+    </div>
+    <div class="pnums">
+      <div><span>Prob. del modelo</span><b class="${rateCls(pSel)}">${pct1(pSel)}</b></div>
+      <div><span>Cuota justa</span><b>${fmtOdd(1 / pSel)}</b></div>
+      <div><span>Mínima recomendada</span><b>${fmtOdd(1.1 / pSel)}</b></div>
+      <div><span>Valor esperado</span><b class="${evv == null ? '' : evv > 0 ? 'good' : 'bad'}">${evv == null ? 'pon tu cuota' : signed((evv * 100).toFixed(1)) + ' %'}</b></div>
+    </div>
+    ${pb.push > 0.005 ? `<p class="mut tiny">Línea entera: ${pct1(pb.push)} de que quede exacto (se devuelve la apuesta).</p>` : ''}
+    <div class="tiles">${tile('l5', 'L5')}${tile('l10', 'L10')}${tile('l20', 'L20')}${tile('h2h', 'H2H')}${tile('cur', curLabel)}${tile('prev', prevLabel)}</div>
+    ${prev.games === undefined ? '<p class="mut tiny">Cargando la temporada pasada…</p>' : ''}
+    <div class="bchart" style="height:${H + 60}px">
+      <div class="yax"><span style="bottom:${H + 34}px">${Math.round(maxV / 1.12)}</span><span style="bottom:34px">0</span></div>
+      <div class="bars">${tramo.map((x) => { const v = f(x), d = new Date(x.date); return `<div class="bc" title="${esc((x.home ? 'vs ' : '@ ') + x.opp)} · ${x.min} min${x.b2b ? ' · B2B' : ''}"><span style="bottom:${(v / maxV) * H + 36}px">${v}</span><i class="${hit(x) ? 'win' : 'loss'}" style="height:${(v / maxV) * H}px"></i><small>${d.getDate()}/${d.getMonth() + 1}<br><b>${x.home ? '' : '@'}${esc(x.opp)}</b></small></div>`; }).join('') || '<p class="mut" style="padding:40px">Sin partidos con estos filtros.</p>'}
+        <div class="lline" style="bottom:${(line / maxV) * H + 34}px"><b>${num1(line)}</b></div></div>
+    </div>
+    <div class="legend"><span><i class="win"></i>${pick === 'over' ? 'Superó' : 'Quedó bajo'} ${num1(line)}</span><span><i class="loss"></i>No ${pick === 'over' ? 'llegó' : 'quedó bajo'}</span><span><i class="ln"></i>Línea</span></div>
+    <p class="mut">${pick === 'over' ? 'Más' : 'Menos'} de ${num1(line)} se cumplió en <b class="acc">${hits} de ${tramo.length}</b> partidos de este tramo.</p>
+  </div>`;
+
+  const stats = `<div class="card pstats">
+    <div><span>Media</span><b>${num1(mean(tvals))}</b></div><div><span>Mediana</span><b>${num1(median(tvals))}</b></div><div><span>Máx.</span><b>${tvals.length ? Math.max(...tvals) : '–'}</b></div>
+    <div><span>Def. ${esc(oppAbbr)}</span><b>${rk ? rk + '.º' : '–'}</b></div>
+    <p class="mut tiny">${esc(oppAbbr)} es la ${rk ? rk + '.ª' : 'N/D'} defensa en puntos permitidos (1.ª = la que más concede). ESPN no da la defensa por posición. La proyección ya ajusta por el rival (×${pr.fOpp.toFixed(2).replace('.', ',')}) y por jugar ${side === 'home' ? 'en casa' : 'fuera'} (×${pr.fHA.toFixed(2).replace('.', ',')}). Base: 40 % L5 ${num1(pr.l5)} · 35 % L10 ${num1(pr.l10)} · 25 % temporada ${num1(pr.season)}.</p>
+  </div>`;
+
+  const filters = `<div class="card pfil">
+    <div class="seg"><button data-pfs="all" class="${F.side === 'all' ? 'on' : ''}">Todos</button><button data-pfs="home" class="${F.side === 'home' ? 'on' : ''}">Casa</button><button data-pfs="away" class="${F.side === 'away' ? 'on' : ''}">Fuera</button></div>
+    <label class="minf"><span class="mut">Mín. minutos</span><input id="minMin" type="range" min="0" max="40" step="1" value="${F.minMin}"><b>${F.minMin}</b></label>
+    <label class="minf"><span class="mut">Descanso</span><select id="restSel"><option value="all" ${F.rest === 'all' ? 'selected' : ''}>Todos</option><option value="b2b" ${F.rest === 'b2b' ? 'selected' : ''}>B2B (0 días)</option><option value="1" ${F.rest === '1' ? 'selected' : ''}>1 día</option><option value="2" ${F.rest === '2' ? 'selected' : ''}>2+ días</option></select></label>
+  </div>`;
+
+  const rows = [...tramo].reverse().map((x) => { const d = new Date(x.date), v = f(x); return `<tr><td>${d.getDate()}/${d.getMonth() + 1}${x.b2b ? ' <span class="b2b">B2B</span>' : ''}</td><td>${x.home ? 'vs' : '@'} ${esc(x.opp)}</td><td>${x.min}</td><td>${x.points}</td><td>${x.reb}</td><td>${x.ast}</td><td>${x.tpm}-${x.tpa}</td><td>${x.fgm}-${x.fga}</td><td>${x.ftm}-${x.fta}</td><td>${x.stl}</td><td>${x.blk}</td><td class="${hit(x) ? 'acc' : ''}"><b>${v}</b></td></tr>`; }).join('');
+  const table = `<div class="card"><h4>PARTIDOS DEL TRAMO</h4><div class="scroll"><table class="glog"><tr><th>Fecha</th><th>Rival</th><th>MIN</th><th>PTS</th><th>REB</th><th>AST</th><th>3PM-3PA</th><th>TC</th><th>TL</th><th>ROB</th><th>TAP</th><th>${esc(CHIP[stat] || STATS[stat].short)}</th></tr>${rows}</table></div></div>
+    <p class="mut tiny" style="text-align:center">Estimaciones a partir de partidos pasados; no garantizan nada. +18 · Juega solo lo que puedas permitirte perder.</p>`;
+
+  return top + hero + statTabs(stat) + controls + stats + filters + table;
+}
+const slipPropId = (c) => `${c.ev.id}|prop|${c.pid}|${c.stat}|${c.pick}|${c.line}`;
+function togglePropSlip() {
+  const c = playerCtx(); if (!c || !c.pr) return;
+  const id = slipPropId(c);
+  let s = getSlip();
+  if (s.some((x) => x.id === id)) s = s.filter((x) => x.id !== id);
+  else {
+    const pb = probOver(c.pr, c.line), p = c.pick === 'over' ? pb.over : pb.under;
+    const price = S.detail.price?.[c.key] || null;
+    const name = c.p?.displayName || 'Jugador';
+    s.push({ id, game: matchName(c.ev, true), time: c.ev.commence_time, market: 'Jugador · ' + STATS[c.stat].label,
+      pick: `${name} ${c.pick === 'over' ? 'Más' : 'Menos'} de ${num1(c.line)} ${STATS[c.stat].label.toLowerCase()}`,
+      price: price || Math.round((1 / p) * 100) / 100, book: price ? 'Tu casa' : 'Cuota justa (pon la de tu casa)', pModel: p,
+      stake: Math.max(1, Math.round(bankroll() * Math.min(0.01, price ? kelly(p, price) / 4 : 0.005))) });
+  }
+  setSlip(s); render();
+}
+function setLine(v) {
+  const c = playerCtx(); if (!c) return;
+  (S.detail.lines ||= {});
+  if (v === 'reset') delete S.detail.lines[c.key];
+  else S.detail.lines[c.key] = Math.max(0, Math.round(v * 2) / 2);
 }
 
 // ---------- Eventos ----------
 document.addEventListener('click', (e) => {
-  const t = e.target.closest('button,[data-open]');
+  const t = e.target.closest('button,[data-open],[data-pl]');
   if (!t) return;
+  // Perfil del jugador
+  if (t.dataset.pl) { location.hash = `#p/${encodeURIComponent(S.detail.id)}/j/${t.dataset.pl}`; return; }
+  if (t.dataset.act === 'pback') { if (history.length > 1) history.back(); else location.hash = '#p/' + S.detail.id; return; }
+  if (t.dataset.pick) { S.detail.pick = t.dataset.pick; return render(); }
+  if (t.dataset.line) { const c = playerCtx(); if (c) setLine(t.dataset.line === 'reset' ? 'reset' : c.line + parseFloat(t.dataset.line)); return render(); }
+  if (t.dataset.tramo) { S.detail.pf.tramo = t.dataset.tramo; return render(); }
+  if (t.dataset.pfs) { S.detail.pf.side = t.dataset.pfs; return render(); }
+  if (t.dataset.act === 'propadd') return togglePropSlip();
   if (t.id === 'googleBtn') return googleLogin();
   if (t.dataset.auth) return setAuthMode(t.dataset.auth);
   if (t.dataset.act === 'account') return isGuest() ? showLogin('signup') : (S.detail && (location.hash = ''), document.querySelector('[data-tab=perfil]').click());
@@ -923,7 +1162,13 @@ document.addEventListener('change', (e) => {
   if (t.id === 'fcSel') { S.fc = t.value; store.set('fc', S.fc); load(); }
   if (t.id === 'bankIn') store.set('bank:' + S.user.uid, +t.value || 0);
   if (t.dataset.stake != null) { const s = getSlip(); s[+t.dataset.stake].stake = +t.value || 0; setSlip(s); render(); }
+  if (t.id === 'lineIn') { if (t.value !== '') setLine(+t.value); render(); }
+  if (t.id === 'priceIn') { const c = playerCtx(); if (c) { (S.detail.price ||= {})[c.key] = +t.value > 1 ? +t.value : undefined; } render(); }
+  if (t.id === 'minMin') { S.detail.pf.minMin = +t.value; render(); }
+  if (t.id === 'restSel') { S.detail.pf.rest = t.value; render(); }
 });
+// Mientras se arrastra el filtro de minutos, solo actualiza el número
+document.addEventListener('input', (e) => { if (e.target.id === 'minMin') e.target.nextElementSibling.textContent = e.target.value; });
 
 // ---------- Partidos reales vía ESPN (sin API key) ----------
 // Partidos de hoy y próximos días, marcadores en vivo y cuotas de DraftKings (solo para comparar).
@@ -982,8 +1227,17 @@ async function fetchEspn() {
 
 // Navegación: #p/<id> abre la página del partido; el botón atrás del navegador vuelve
 function route() {
-  const m = location.hash.match(/^#p\/(.+)$/);
-  S.detail = m ? { id: decodeURIComponent(m[1]), tab: 'partido', hist: { team: 'home', n: 10, side: 'all' } } : null;
+  // #p/<partido>  ·  #p/<partido>/j/<home|away>/<jugador>
+  const m = location.hash.match(/^#p\/([^/]+)(?:\/j\/(home|away)\/(.+))?$/);
+  if (!m) { S.detail = null; }
+  else {
+    const id = decodeURIComponent(m[1]), prev = S.detail && S.detail.id === id ? S.detail : null;
+    // Al entrar y salir del perfil se conservan mercado, líneas, filtros y pestaña
+    S.detail = { id, tab: m[2] || prev?.tab || 'partido', hist: prev?.hist || { team: 'home', n: 10, side: 'all' },
+      stat: prev?.stat, lines: prev?.lines || {}, price: prev?.price || {}, pick: prev?.pick || 'over',
+      pf: prev?.pf || { tramo: 'l10', side: 'all', minMin: 0, rest: 'all' }, pside: m[2] || null, player: m[3] || null };
+    if (m[3] && prev?.player !== m[3]) S.detail.pf = { tramo: 'l10', side: 'all', minMin: 0, rest: 'all' };
+  }
   window.scrollTo(0, 0);
   if (S.user) render();
 }
