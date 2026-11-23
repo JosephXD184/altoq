@@ -3,14 +3,15 @@
 // Si los dejas vacíos, la app usa partidos y cuotas reales de ESPN y se entra como invitado.
 
 window.RUSHTOP_CONFIG = {
-  // 1) Firebase (login con Google) → https://console.firebase.google.com
-  //    Proyecto > Configuración > Tus apps > Web. Activa "Google" en Authentication > Sign-in method
-  //    y agrega tu dominio (ej. tuusuario.github.io) en Authentication > Settings > Authorized domains.
+  // 1) Firebase (cuentas: correo/contraseña y Google) · proyecto "altoq-befde"
+  //    Esta configuración es pública por diseño (Firebase la protege con los dominios autorizados).
   firebase: {
-    apiKey: "",
-    authDomain: "",
-    projectId: "",
-    appId: ""
+    apiKey: "AIzaSyBl6Eq5uYTT47QchAtNiCUls4ET3c33cFw",
+    authDomain: "altoq-befde.firebaseapp.com",
+    projectId: "altoq-befde",
+    appId: "1:482912647251:web:c02cfa8a261e64e14d6ea6",
+    messagingSenderId: "482912647251",
+    storageBucket: "altoq-befde.firebasestorage.app"
   },
 
   // 2) The Odds API (cuotas en tiempo real) → https://the-odds-api.com  (plan gratis: 500 peticiones/mes)
