@@ -273,6 +273,21 @@ h4{font-size:13px;letter-spacing:.08em;color:var(--mut);margin-bottom:8px}
 .glog th,.glog td{text-align:right}.glog th:nth-child(-n+2),.glog td:nth-child(-n+2){text-align:left}
 .b2b{font-size:11px;font-weight:800;background:var(--surf2);padding:1px 6px;border-radius:6px;color:var(--mut)}
 @media (max-width:640px){.tiles{grid-template-columns:repeat(3,1fr)}.pnums,.pstats{grid-template-columns:repeat(2,1fr)}.phero{grid-template-columns:auto 1fr}.grade{display:none}.ph.big,.ph.big img:first-child{width:72px;height:72px}}
+/* Fútbol y seguimiento */
+.rates.soc{grid-template-columns:repeat(6,1fr)}
+.rates small{font-size:11px;color:var(--mut);font-weight:600}
+.ycd{display:inline-flex;gap:4px;vertical-align:middle}
+.ycd i{width:10px;height:14px;border-radius:2px;background:var(--surf2);border:1px solid var(--edge)}
+.ycd i.y{background:#f5c518;border-color:#f5c518}
+.slip-item{flex-wrap:wrap}
+.track{flex-basis:100%;margin-top:10px;padding:10px 12px;border-radius:12px;background:var(--surf2);border-left:4px solid var(--mut);display:grid;gap:6px}
+.track.ok{border-left-color:var(--good)}.track.warn{border-left-color:#e3a008}.track.bad{border-left-color:var(--bad)}
+.trow{display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:14px}
+.chip.okc{background:var(--good-soft);color:var(--good)}
+.tbar{position:relative;height:8px;border-radius:9px;background:var(--surf);overflow:visible}
+.tbar i{display:block;height:100%;border-radius:9px;background:var(--acc)}
+.tbar em{position:absolute;top:-4px;bottom:-4px;border-left:2px solid var(--ink)}
+@media (max-width:640px){.rates.soc{grid-template-columns:repeat(2,1fr)}}
 /* Jugadores */
 .pcard{padding:16px}
 .phead{display:grid;grid-template-columns:auto 1fr auto auto;gap:14px;align-items:center}
