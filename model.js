@@ -328,7 +328,9 @@ function simSoccer(lh, la, minute, scoreH, scoreA) {
   // Hándicap asiático equilibrado de medio gol (local)
   let best = null;
   for (let l = -3.5; l <= 3.5; l += 1) { let c = 0; for (let i = 0; i < N; i++) if (diffs[i] + l > 0) c++; const p = c / N; if (!best || Math.abs(p - 0.5) < Math.abs(best.p - 0.5)) best = { line: l, p }; }
-  return { pHome: pH, pDraw: pD, pAway: pA, pOver25: O25 / N, pBTTS: BTTS / N, top, ah: best };
+  // Distribución completa de marcadores: permite calcular cualquier línea de hándicap o goles
+  const dist = Object.fromEntries(Object.entries(scores).map(([s, c]) => [s, c / N]));
+  return { pHome: pH, pDraw: pD, pAway: pA, pOver25: O25 / N, pBTTS: BTTS / N, top, ah: best, dist };
 }
 async function predictSoccer(M, ev, ctx) {
   const rh = M.R[ev.home_id], ra = M.R[ev.away_id]; if (!rh || !ra) return null;
