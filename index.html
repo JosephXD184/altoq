@@ -4,13 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <title>ALTOQ</title>
-  <meta name="description" content="ALTOQ Â· probabilidades del modelo y cuotas en tiempo real.">
+  <meta name="description" content="ALTOQ · probabilidades del modelo y cuotas en tiempo real.">
   <meta name="theme-color" content="#0A0A0A">
   <link rel="icon" href="icon.svg">
   <link rel="apple-touch-icon" href="icon.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=5">
+  <link rel="stylesheet" href="styles.css?v=6">
   <script>try{document.documentElement.dataset.theme=localStorage.getItem('rushtop:theme')||'dark'}catch(e){}</script>
 </head>
 <body>
@@ -23,7 +23,9 @@
           <button data-liga="nfl">NFL</button>
           <button data-liga="fc">FC</button>
         </nav>
-        <button class="icon-btn" id="themeBtn" title="Cambiar tema">â—</button>
+        <button class="icon-btn" id="themeBtn" title="Cambiar tema claro/oscuro" aria-label="Cambiar tema">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor"/></svg>
+        </button>
         <button class="acc-btn" id="accountBtn" data-act="account">Crear cuenta</button>
       </div>
     </div>
@@ -33,7 +35,7 @@
     <!-- Login -->
     <section id="login" class="card login hidden">
       <h1 class="brand big"><img class="logo-on-dark" src="logo.svg" alt="ALTOQ"><img class="logo-on-light" src="logo-dark.svg" alt="ALTOQ"></h1>
-      <p class="mut">Crea tu cuenta gratis y desbloquea todo el anÃ¡lisis.</p>
+      <p class="mut">Crea tu cuenta gratis y desbloquea todo el análisis.</p>
       <div class="seg wide2">
         <button data-auth="login" id="tabLogin">Entrar</button>
         <button data-auth="signup" id="tabSignup" class="on">Crear cuenta</button>
@@ -41,9 +43,9 @@
       <form id="authForm" class="aform" novalidate>
         <label id="nameRow">Nombre<input id="aName" autocomplete="name" placeholder="Tu nombre"></label>
         <label>Correo<input id="aEmail" type="email" autocomplete="email" placeholder="tu@correo.com" required></label>
-        <label id="passRow">ContraseÃ±a<input id="aPass" type="password" autocomplete="new-password" placeholder="MÃ­nimo 6 caracteres" minlength="6"></label>
+        <label id="passRow">Contraseña<input id="aPass" type="password" autocomplete="new-password" placeholder="Mínimo 6 caracteres" minlength="6"></label>
         <button class="btn google" type="submit" id="aSubmit">Crear cuenta gratis</button>
-        <button class="linkbtn" type="button" data-act="reset" id="resetBtn">Â¿Olvidaste tu contraseÃ±a?</button>
+        <button class="linkbtn" type="button" data-act="reset" id="resetBtn">¿Olvidaste tu contraseña?</button>
       </form>
       <div class="or"><span>o</span></div>
       <button class="btn ghost" id="googleBtn">
@@ -53,8 +55,8 @@
       <p class="err hidden" id="loginErr"></p>
       <p class="ok hidden" id="loginOk"></p>
       <button class="linkbtn" data-act="guest">Seguir como invitado (acceso limitado)</button>
-      <p class="tiny mut hidden" id="localNote">Modo de prueba: falta configurar Firebase, asÃ­ que la cuenta solo existe en este navegador.</p>
-      <p class="tiny mut">Tus apuestas y tu boleto son privados: solo los ves tÃº. +18. Juega con responsabilidad.</p>
+      <p class="tiny mut hidden" id="localNote">Modo de prueba: falta configurar Firebase, así que la cuenta solo existe en este navegador.</p>
+      <p class="tiny mut">Tus apuestas y tu boleto son privados: solo los ves tú. +18. Juega con responsabilidad.</p>
     </section>
 
     <!-- App -->
@@ -64,17 +66,17 @@
     </section>
   </main>
 
+  <!-- Barra inferior: iconos dibujados en SVG (no dependen de la codificación) -->
   <nav class="tabs hidden" id="tabs">
-    <button data-tab="hoy" class="on"><span>â—</span>Hoy</button>
-    <button data-tab="valor"><span>â–²</span>Picks</button>
-    <button data-tab="boleto"><span>â–¤</span>Boleto <i id="slipCount"></i></button>
-    <button data-tab="perfil"><span>â—‰</span>Perfil</button>
+    <button data-tab="hoy" class="on"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="17" rx="3"/><path d="M3 9h18M8 2v4M16 2v4"/></svg>Hoy</button>
+    <button data-tab="props"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="7" r="4"/><path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7"/></svg>Props</button>
+    <button data-tab="valor"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/></svg>Picks</button>
+    <button data-tab="boleto"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v4a3 3 0 0 0 0 6v4H4v-4a3 3 0 0 0 0-6z"/><path d="M10 9h4M10 15h4"/></svg>Boleto <i id="slipCount"></i></button>
+    <button data-tab="perfil"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="10" r="3"/><path d="M6.5 18.5c1.2-2 3.2-3 5.5-3s4.3 1 5.5 3"/></svg>Perfil</button>
   </nav>
 
-  <div class="sheet-bg hidden" id="sheetBg"><div class="sheet" id="sheet"></div></div>
-
-  <!-- ?v= obliga al navegador a bajar la versiÃ³n nueva tras cada publicaciÃ³n -->
-  <script src="config.js?v=5"></script>
-  <script type="module" src="app.js?v=5"></script>
+  <!-- ?v= obliga al navegador a bajar la versión nueva tras cada publicación -->
+  <script src="config.js?v=6"></script>
+  <script type="module" src="app.js?v=6"></script>
 </body>
 </html>
