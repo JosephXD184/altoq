@@ -398,3 +398,25 @@ h4{font-size:13px;letter-spacing:.08em;color:var(--mut);margin-bottom:8px}
 .ltiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(78px,1fr));gap:8px;margin-top:8px}
 .ltiles>div{background:var(--surf2);border-radius:10px;padding:8px;text-align:center;display:flex;flex-direction:column}
 .ltiles span{font-size:11px;color:var(--mut);font-weight:700}.ltiles b{font-size:18px}
+/* Calendario por noches */
+.calhead{margin:6px 0 12px}.calhead h2{margin:2px 0 0;font-size:34px;letter-spacing:-.02em}
+.calsub{color:var(--acc);font-weight:700;font-size:14px}
+.caldays{display:grid;grid-template-columns:repeat(7,1fr);gap:8px;margin-bottom:10px}
+.calday{background:var(--surf);border:1px solid var(--edge);border-radius:12px;padding:8px 4px;display:flex;flex-direction:column;align-items:center;gap:2px;color:var(--ink);font:inherit;cursor:pointer}
+.calday span{font-size:12px;color:var(--mut);font-weight:600}.calday b{font-size:20px}
+.calday.on{background:var(--acc);border-color:var(--acc);color:var(--acc-ink)}.calday.on span{color:var(--acc-ink)}
+.calday.none:not(.on){opacity:.45}
+.calk{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px}
+.calk .card{display:flex;flex-direction:column;gap:2px;padding:12px 14px}.calk b{font-size:24px}.calk span{color:var(--mut);font-size:13px}
+@media(max-width:560px){.caldays{gap:4px}.calday b{font-size:16px}.calk{gap:6px}.calk b{font-size:18px}.calk span{font-size:11px}.calhead h2{font-size:26px}}
+/* Sub-selección de equipo en Jugadores */
+.teamseg{display:flex;gap:8px;margin:0 0 12px}.teamseg button{flex:1;display:flex;align-items:center;justify-content:center;gap:8px;background:var(--surf);border:1px solid var(--edge);border-radius:10px;padding:8px;color:var(--ink);font:inherit;font-weight:700;cursor:pointer}
+.teamseg button.on{border-color:var(--acc);background:var(--acc-soft);color:var(--acc)}.teamseg img{width:20px;height:20px}
+/* Resultados de mis apuestas */
+.pnl{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:8px 0}.pnl .card{display:flex;flex-direction:column;padding:10px}.pnl b{font-size:18px}
+@media(max-width:560px){.pnl{grid-template-columns:repeat(2,1fr)}}
+/* Fútbol: fichas de liga */
+.lchips{display:flex;gap:8px;overflow-x:auto;padding-bottom:4px;margin-bottom:10px;scrollbar-width:none}
+.lchip{flex:none;background:var(--surf);border:1px solid var(--edge);border-radius:999px;padding:9px 16px;font:inherit;font-weight:700;color:var(--mut);cursor:pointer}
+.lchip.on{background:var(--acc);border-color:var(--acc);color:var(--acc-ink)}
+.mcard{position:relative}.ltag{position:absolute;top:8px;left:10px;font-size:10px;font-weight:700;color:var(--acc);text-transform:uppercase;letter-spacing:.05em}

@@ -286,7 +286,75 @@ function finishUS(out, lines, kind) {
 }
 
 // ---------- Fútbol v4 ----------
-const SOCCER_OK = ['soccer/eng.1', 'soccer/esp.1', 'soccer/ita.1', 'soccer/ger.1', 'soccer/fra.1', 'soccer/bra.1'];
+const SOCCER_OK = ['soccer/eng.1', 'soccer/esp.1', 'soccer/ita.1', 'soccer/ger.1', 'soccer/fra.1', 'soccer/bra.1', 'soccer/arg.1'];
+// Ataque/defensa de cada equipo frente a la media de su liga (temporada actual + 15 partidos "ficticios" de la anterior)
+function soccerRatings(teams, prev) {
+  const prevAvg = prev.reduce((s, t) => s + (t.gf || 0), 0) / Math.max(1, prev.reduce((s, t) => s + (t.gp || 0), 0));
+  const prevMap = Object.fromEntries(prev.map((t) => [t.id, t]));
+  const gpTot = teams.reduce((s, t) => s + (t.gp || 0), 0);
+  const media = teams.reduce((s, t) => s + (t.gf || 0), 0) / Math.max(1, gpTot) || prevAvg || 1.35;
+  const K = 15, Pp = 0.8, R = {};
+  for (const t of teams) {
+    const p = prevMap[t.id];
+    let attPrev, defPrev, promoted = false;
+    if (p && p.gp && prevAvg) { attPrev = 1 + Pp * ((p.gf / p.gp) / prevAvg - 1); defPrev = 1 + Pp * ((p.ga / p.gp) / prevAvg - 1); }
+    else { attPrev = 0.88; defPrev = 1.12; promoted = true; }
+    const gp = t.gp || 0;
+    R[t.id] = { att: ((t.gf || 0) + K * media * attPrev) / (gp + K) / media, def: ((t.ga || 0) + K * media * defPrev) / (gp + K) / media, promoted, gp };
+  }
+  return { R, media };
+}
+// Versión ligera (solo tablas de posiciones): la usan las copas para tener el rating de cada liga de origen
+const leagueLight = (path) => memo('light' + path, 36e5, async () => {
+  const teams = await leagueTeams(path); if (!teams.length) return null;
+  const season = (await getJ(`${BASE(path)}/scoreboard`))?.leagues?.[0]?.season?.year;
+  const prev = season ? await leagueTeams(path, season - 1) : [];
+  return soccerRatings(teams, prev);
+});
+// Liga de origen del equipo (API "core" de ESPN: la de equipos de site.api no permite CORS)
+const teamLeague = (path, id) => memo('tl' + id, 864e5, async () => {
+  const j = await getJ(`https://sports.core.api.espn.com/v2/sports/soccer/leagues/${path.split('/')[1]}/teams/${id}`);
+  return j?.defaultLeague?.$ref?.match(/leagues\/([^/?]+)/)?.[1] || null;
+});
+// Fuerza relativa de cada liga (goles que vale un equipo medio de esa liga frente a uno medio de la Premier),
+// calibrada a grandes rasgos con el coeficiente UEFA
+const LEAGUE_STR = {
+  'eng.1': 1, 'esp.1': 0.95, 'ita.1': 0.92, 'ger.1': 0.92, 'fra.1': 0.85, 'por.1': 0.76, 'ned.1': 0.75, 'bel.1': 0.7,
+  'tur.1': 0.68, 'cze.1': 0.63, 'gre.1': 0.63, 'aut.1': 0.62, 'sui.1': 0.62, 'sco.1': 0.6, 'den.1': 0.6, 'nor.1': 0.58,
+  'pol.1': 0.57, 'isr.1': 0.55, 'cro.1': 0.56, 'srb.1': 0.56, 'ukr.1': 0.56, 'swe.1': 0.55, 'cyp.1': 0.54, 'rus.1': 0.58,
+  'hun.1': 0.52, 'rou.1': 0.52, 'bul.1': 0.5, 'slo.1': 0.5, 'svk.1': 0.5, 'aze.1': 0.5, 'kaz.1': 0.48,
+  'eng.2': 0.72, 'esp.2': 0.62, 'ita.2': 0.6, 'ger.2': 0.66, 'fra.2': 0.58,
+};
+const CUP_STR_DEFAULT = 0.5, CUP_SELF_STR = 0.8; // 0,8 = nivel medio de un equipo de copa frente a la Premier
+const CUP_HOME = 1.12, CUP_AWAY = 0.9, CUP_SHRINK = 0.85; // localía típica en copas europeas
+async function fitCup(path) { return { kind: 'cup', path, nGames: 0 }; }
+async function predictCup(M, ev, ctx) {
+  const side = async (id) => {
+    const slug = await teamLeague(ev.path, id);
+    if (slug && !/uefa|fifa|conmebol/.test(slug)) {
+      const L = await leagueLight('soccer/' + slug); const r = L?.R[String(id)];
+      if (r) return { slug, media: L.media, r, S: LEAGUE_STR[slug] ?? CUP_STR_DEFAULT };
+    }
+    // ESPN no tiene su liga (p. ej. Azerbaiyán): rating con sus partidos en esta copa y la anterior
+    const C = await leagueLight(ev.path); const r = C?.R[String(id)]; if (!r) return null;
+    return { slug: 'copa', media: C.media, r, S: CUP_SELF_STR, self: true };
+  };
+  const [h, a] = await Promise.all([side(ev.home_id), side(ev.away_id)]);
+  if (!h || !a) return null;
+  const media = (h.media + a.media) / 2;
+  const hf = ev.neutral ? 1 : CUP_HOME, af = ev.neutral ? 1 : CUP_AWAY;
+  // ataque efectivo = ataque en su liga × fuerza de la liga; defensa efectiva = defensa en su liga ÷ fuerza
+  // (recortado ^0,85: dominar tu liga exagera tu nivel frente a rivales de otras ligas)
+  const sh = (x) => Math.pow(x, CUP_SHRINK);
+  const rh = { att: sh(h.r.att) * h.S, def: sh(h.r.def) / h.S, gp: h.r.gp, promoted: h.r.promoted };
+  const ra = { att: sh(a.r.att) * a.S, def: sh(a.r.def) / a.S, gp: a.r.gp, promoted: a.r.promoted };
+  const lh = media * hf * rh.att * ra.def, la = media * af * ra.att * rh.def;
+  const live = ev.state === 'in' ? { minute: parseInt(ev.clock) || null, sh: +ev.score?.[1] || 0, sa: +ev.score?.[0] || 0 } : null;
+  const s = simSoccer(lh, la, live?.minute ?? null, live?.sh, live?.sa);
+  const why = { kind: 'soccer', cup: { h: { ...h, raw: h.r }, a: { ...a, raw: a.r }, media, hf, af }, homeAvg: media * hf, awayAvg: media * af, media, rh, ra, live };
+  const src = (x, ab) => (x.self ? `${ab}: ESPN no tiene su liga → rating con sus partidos en la copa` : `${ab} viene de ${x.slug.toUpperCase()} (fuerza ${x.S.toFixed(2)})`);
+  return soccerFinish(ev, ctx, s, lh, la, why, [`Copa: ${src(h, ev.home_abbr)} · ${src(a, ev.away_abbr)}`, 'Bajas: N/D'], 0);
+}
 async function fitSoccer(path) {
   const teams = await leagueTeams(path);
   const games = await leagueGames(path, teams);
@@ -340,8 +408,12 @@ async function predictSoccer(M, ev, ctx) {
   const live = ev.state === 'in' ? { minute: parseInt(ev.clock) || null, sh: +ev.score?.[1] || 0, sa: +ev.score?.[0] || 0 } : null;
   const s = simSoccer(lhAdj, la, live?.minute ?? null, live?.sh, live?.sa);
   const why = { kind: 'soccer', homeAvg: M.homeAvg, awayAvg: M.awayAvg, media: M.media, rh, ra, live };
-  const out = { model: 'Fútbol v4', why, ...s, xgHome: lhAdj, xgAway: la, nGames: M.nGames, live: !!live,
-    context: [...(rh.promoted ? [ev.home_abbr + ': sin temporada anterior en ESPN → tratado como ascendido (0,88/1,12)'] : []), ...(ra.promoted ? [ev.away_abbr + ': sin temporada anterior en ESPN → tratado como ascendido (0,88/1,12)'] : []), 'Bajas: N/D (ESPN no publica bajas confirmadas de fútbol de forma fiable)', 'Córners/tiros: N/D'] };
+  return soccerFinish(ev, ctx, s, lhAdj, la, why, ['Bajas: N/D (ESPN no publica bajas confirmadas de fútbol de forma fiable)'], M.nGames);
+}
+function soccerFinish(ev, ctx, s, lhAdj, la, why, notes, nGames) {
+  const { rh, ra, live } = why;
+  const out = { model: why.cup ? 'Fútbol v4 · copas' : 'Fútbol v4', why, ...s, xgHome: lhAdj, xgAway: la, nGames, live: !!live,
+    context: [...(rh.promoted ? [ev.home_abbr + ': sin temporada anterior en ESPN → tratado como ascendido (0,88/1,12)'] : []), ...(ra.promoted ? [ev.away_abbr + ': sin temporada anterior en ESPN → tratado como ascendido (0,88/1,12)'] : []), ...notes] };
   const lines = ctx.lines; const fair = (p) => (p ? 1 / p : null);
   out.fair = { home: fair(s.pHome), draw: fair(s.pDraw), away: fair(s.pAway), over: fair(s.pOver25), under: fair(1 - s.pOver25), btts: fair(s.pBTTS), noBtts: fair(1 - s.pBTTS) };
   out.minOdds = Object.fromEntries(Object.entries(out.fair).map(([k, v]) => [k, v ? v * 1.1 : null]));
@@ -370,7 +442,8 @@ export function modelFor(path) {
   if (path === 'basketball/nba') return { fit: () => memo('fit' + path, 6e5, () => fitNBA(path)), predict: predictNBA, name: 'NBA v2.5' };
   if (path === 'football/nfl') return { fit: () => memo('fit' + path, 6e5, () => fitNFL(path)), predict: predictNFL, name: 'NFL ridge' };
   if (SOCCER_OK.includes(path)) return { fit: () => memo('fit' + path, 6e5, () => fitSoccer(path)), predict: predictSoccer, name: 'Fútbol v4' };
-  return null; // copas europeas, Liga 1 Perú, etc.: pendiente → N/D
+  if (/uefa\./.test(path)) return { fit: () => fitCup(path), predict: predictCup, name: 'Fútbol v4 · copas' };
+  return null; // Liga 1 Perú, etc.: pendiente → N/D
 }
 export const pendingReason = (path) => (/uefa/.test(path) ? 'Copas europeas: capa del modelo pendiente (necesita los ratings de todas las ligas de origen) → N/D' : /per\.1/.test(path) ? 'Liga 1 Perú: modelo por diferencia de gol pendiente → N/D' : 'Modelo no disponible para esta competición → N/D');
 export async function summaryFor(path, id) { return memo('sum' + id, 6e5, () => getJ(`${BASE(path)}/summary?event=${id}`)); }

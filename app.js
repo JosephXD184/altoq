@@ -1,5 +1,5 @@
 // ALTOQ · login con Google (Firebase), cuotas en tiempo real (The Odds API) y detector de valor (EV+).
-import { modelFor, pendingReason, summaryFor, logPrediction, settleResults, registryStats } from './model.js?v=7';
+import { modelFor, pendingReason, summaryFor, logPrediction, settleResults, registryStats } from './model.js?v=8';
 const CFG = window.RUSHTOP_CONFIG || {};
 const TZ = 'America/Lima';
 const $ = (s) => document.querySelector(s);
@@ -12,7 +12,7 @@ const store = {
 const FC_LEAGUES = {
   soccer_epl: 'Premier League', soccer_spain_la_liga: 'LaLiga', soccer_italy_serie_a: 'Serie A',
   soccer_germany_bundesliga: 'Bundesliga', soccer_france_ligue_one: 'Ligue 1', soccer_brazil_campeonato: 'Brasileirão',
-  soccer_peru_liga1: 'Liga 1 Perú', soccer_uefa_champs_league: 'Champions League', soccer_uefa_europa_league: 'Europa League',
+  soccer_argentina_primera_division: 'Liga Argentina', soccer_peru_liga1: 'Liga 1 Perú', soccer_uefa_champs_league: 'Champions League', soccer_uefa_europa_league: 'Europa League',
   soccer_uefa_europa_conference_league: 'Conference League',
 };
 // Ruta equivalente en ESPN (partidos reales, marcadores y cuotas DraftKings sin API key)
@@ -20,7 +20,7 @@ const ESPN = {
   basketball_nba: 'basketball/nba', americanfootball_nfl: 'football/nfl',
   soccer_epl: 'soccer/eng.1', soccer_spain_la_liga: 'soccer/esp.1', soccer_italy_serie_a: 'soccer/ita.1',
   soccer_germany_bundesliga: 'soccer/ger.1', soccer_france_ligue_one: 'soccer/fra.1', soccer_brazil_campeonato: 'soccer/bra.1',
-  soccer_peru_liga1: 'soccer/per.1', soccer_uefa_champs_league: 'soccer/uefa.champions', soccer_uefa_europa_league: 'soccer/uefa.europa',
+  soccer_argentina_primera_division: 'soccer/arg.1', soccer_peru_liga1: 'soccer/per.1', soccer_uefa_champs_league: 'soccer/uefa.champions', soccer_uefa_europa_league: 'soccer/uefa.europa',
   soccer_uefa_europa_conference_league: 'soccer/uefa.europa.conf',
 };
 const HAS_FIREBASE = !!(CFG.firebase && CFG.firebase.apiKey);
@@ -28,7 +28,7 @@ const HAS_ODDS = !!CFG.oddsApiKey;
 
 const S = {
   liga: store.get('liga', 'nba'),
-  fc: FC_LEAGUES[store.get('fc', 'soccer_epl')] ? store.get('fc', 'soccer_epl') : 'soccer_epl',
+  fc: FC_LEAGUES[store.get('fc', 'all')] ? store.get('fc', 'all') : 'all', // 'all' = todas las ligas y copas
   tab: 'hoy',
   user: null,
   events: [],
@@ -40,7 +40,11 @@ const S = {
   timer: null,
   error: null,
 };
-const sportKey = () => ({ nba: 'basketball_nba', nfl: 'americanfootball_nfl', fc: S.fc }[S.liga]);
+const sportKey = () => ({ nba: 'basketball_nba', nfl: 'americanfootball_nfl', fc: 'soccer' }[S.liga]);
+// En fútbol se cargan todas las ligas y copas a la vez; las fichas de arriba solo filtran
+const leagueKeys = () => (S.liga === 'fc' ? Object.keys(FC_LEAGUES) : [sportKey()]);
+const FC_SHORT = { soccer_epl: 'Premier', soccer_spain_la_liga: 'LaLiga', soccer_italy_serie_a: 'Serie A', soccer_germany_bundesliga: 'Bundesliga', soccer_france_ligue_one: 'Ligue 1', soccer_brazil_campeonato: 'Brasileirão', soccer_argentina_primera_division: 'Argentina', soccer_peru_liga1: 'Liga 1', soccer_uefa_champs_league: 'Champions', soccer_uefa_europa_league: 'Europa League', soccer_uefa_europa_conference_league: 'Conference' };
+const fcVisible = (a) => S.liga !== 'fc' || S.fc === 'all' || a.ev.sport_key === S.fc;
 
 // ---------- Formato ----------
 const fmtOdd = (d) => {
@@ -188,32 +192,46 @@ async function load() {
 }
 // Calcula el modelo propio de cada partido (después de pintar, porque necesita bajar toda la temporada)
 async function runModels(token) {
-  const path = ESPN[sportKey()]; const mdl = path && modelFor(path);
-  if (!mdl) { S.modelStatus = path ? pendingReason(path) : null; render(); return; }
-  S.modelStatus = 'Calculando el modelo ' + mdl.name + '…'; render();
-  try {
-    const M = await mdl.fit();
-    if (token !== S.loadToken) return;
-    settleResults(M.games);
-    for (const a of S.analysis) {
-      const ev = a.ev;
-      const sum = await summaryFor(ev.path, ev.id);
-      const injuries = (teamId) => (sum?.injuries || []).find((t) => String(t.team?.id) === String(teamId))?.injuries || [];
-      const leaders = (teamId) => {
-        const t = (sum?.leaders || []).find((x) => String(x.team?.id) === String(teamId));
-        const id = (n) => String(t?.leaders?.find((l) => l.name === n)?.leaders?.[0]?.athlete?.id || '');
-        return { pass: id('passingYards'), rush: id('rushingYards'), rec: id('receivingYards') };
-      };
-      ev.pred = await mdl.predict(M, ev, { injuries, leaders, lines: ev.lines || {} });
+  const paths = [...new Set(S.analysis.map((a) => a.ev.path).filter(Boolean))];
+  const want = S.liga === 'fc' && S.fc !== 'all' ? ESPN[S.fc] : null;
+  paths.sort((x, y) => (y === want) - (x === want)); // primero la liga que estás viendo
+  const known = paths.filter((p) => modelFor(p));
+  if (!known.length) { S.modelStatus = paths.length === 1 ? pendingReason(paths[0]) : null; render(); return; }
+  const errs = [];
+  for (const [i, path] of known.entries()) {
+    const mdl = modelFor(path);
+    S.modelStatus = `Calculando el modelo ${mdl.name}${known.length > 1 ? ` (${i + 1}/${known.length})` : ''}…`; render();
+    try {
+      const M = await mdl.fit();
       if (token !== S.loadToken) return;
-      if (ev.pred) logPrediction(ev, ev.pred);
-    }
-    S.modelStatus = null;
-  } catch (e) { S.modelStatus = 'No se pudo calcular el modelo: ' + e.message; }
+      if (M.games) settleResults(M.games);
+      // Primero el día que estás viendo; se repinta cada pocos partidos para no esperar a toda la semana
+      const order = S.analysis.filter((a) => a.ev.path === path).sort((x, y) => (nightKey(x.ev.commence_time) === S.calDay ? 0 : 1) - (nightKey(y.ev.commence_time) === S.calDay ? 0 : 1));
+      let done = 0;
+      for (const a of order) {
+        if (++done % 6 === 0) render();
+        const ev = a.ev;
+        const sum = path.startsWith('soccer') ? null : await summaryFor(ev.path, ev.id); // en fútbol el modelo no usa el resumen
+        const injuries = (teamId) => (sum?.injuries || []).find((t) => String(t.team?.id) === String(teamId))?.injuries || [];
+        const leaders = (teamId) => {
+          const t = (sum?.leaders || []).find((x) => String(x.team?.id) === String(teamId));
+          const id = (n) => String(t?.leaders?.find((l) => l.name === n)?.leaders?.[0]?.athlete?.id || '');
+          return { pass: id('passingYards'), rush: id('rushingYards'), rec: id('receivingYards') };
+        };
+        try { ev.pred = await mdl.predict(M, ev, { injuries, leaders, lines: ev.lines || {} }); } catch { ev.pred = null; }
+        if (token !== S.loadToken) return;
+        if (ev.pred) logPrediction(ev, ev.pred);
+      }
+    } catch (e) { errs.push(mdl.name + ': ' + e.message); }
+  }
+  S.modelStatus = errs.length ? 'No se pudo calcular el modelo: ' + errs.join(' · ') : null;
   if (token === S.loadToken) render();
+}async function fetchOdds() {
+  const all = await Promise.all(leagueKeys().map(fetchOddsKey));
+  return all.flat().sort((a, b) => new Date(a.commence_time) - new Date(b.commence_time));
 }
-async function fetchOdds() {
-  const u = new URL(`https://api.the-odds-api.com/v4/sports/${sportKey()}/odds`);
+async function fetchOddsKey(key) {
+  const u = new URL(`https://api.the-odds-api.com/v4/sports/${key}/odds`);
   u.search = new URLSearchParams({ apiKey: CFG.oddsApiKey, regions: CFG.regions || 'eu', markets: CFG.markets || 'h2h', oddsFormat: 'decimal' });
   const r = await fetch(u);
   S.remaining = r.headers.get('x-requests-remaining');
@@ -333,7 +351,7 @@ function render() {
   v.innerHTML = { hoy: viewHoy, props: viewProps, valor: viewValor, boleto: viewBoleto, perfil: viewPerfil }[S.tab]();
 }
 function renderStatus() {
-  const fc = S.liga === 'fc' ? `<select id="fcSel">${Object.entries(FC_LEAGUES).map(([k, n]) => `<option value="${k}" ${k === S.fc ? 'selected' : ''}>${n}</option>`).join('')}</select>` : '';
+  const fc = '';
   $('#status').innerHTML = `
     <div class="toolbar">
       <span class="pill">Datos ESPN · cuotas ${HAS_ODDS ? 'The Odds API' : 'DraftKings'}</span>
@@ -382,12 +400,71 @@ function probBar(p, ev) {
   return `<div class="pbar">${seg(L)}${p.draw ? `<i class="draw" style="width:${w(p.draw)}"></i>` : ''}${seg(R)}</div>
     <div class="pfoot"><span>${pctEs(p[L])}</span><span class="mut">${esc(p.src)}${p.draw ? ' · empate ' + pctEs(p.draw) : ''}${extra}</span><span>${pctEs(p[R])}</span></div>`;
 }
-function viewHoy() {
-  if (!S.analysis.length) return `<div class="card empty">No hay partidos programados en los próximos días para esta liga.</div>`;
-  let html = '', lastDay = '';
-  for (const a of S.analysis) {
+// Calendario por "noche": un partido de madrugada (antes de las 6:00 Lima) cuenta en la noche del día anterior
+const nightKey = (t) => limaDay(new Date(t).getTime() - 6 * 36e5);
+const keyDate = (k) => new Date(k + 'T12:00:00-05:00');
+const wd = (k, f) => keyDate(k).toLocaleDateString('es-PE', { weekday: f, timeZone: TZ }).replace('.', '');
+const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+const dnum = (k) => +k.slice(8);
+const monthOf = (k) => keyDate(k).toLocaleDateString('es-PE', { month: 'long', timeZone: TZ }).toLowerCase();
+function calDays() {
+  const today = nightKey(Date.now());
+  return Array.from({ length: 7 }, (_, i) => limaDay(keyDate(today).getTime() + i * 864e5));
+}
+// Fútbol: próximos 7 días de todas nuestras ligas y copas, con fichas para filtrar
+function viewFutbol() {
+  const leagues = Object.keys(FC_LEAGUES).filter((k) => S.analysis.some((a) => a.ev.sport_key === k));
+  if (S.fc !== 'all' && !leagues.includes(S.fc) && S.analysis.length) S.fc = 'all';
+  const chip = (k, lab) => `<button class="lchip ${S.fc === k ? 'on' : ''}" data-fcf="${k}">${esc(lab)}</button>`;
+  const list = S.analysis.filter(fcVisible);
+  const upcoming = list.filter((a) => a.ev.state !== 'post');
+  const first = upcoming.map((a) => a.ev.commence_time).sort()[0];
+  const firstTxt = first ? new Date(first).toLocaleDateString('es-PE', { weekday: 'short', day: 'numeric', month: 'short', timeZone: TZ }).replace(/\./g, '') + ' ' + fmtTime(first) : '–';
+  const nVal = allPicks().length;
+  let html = `<div class="calhead"><span class="calsub">Próximos 7 días</span><h2>Próximos partidos</h2></div>
+    <div class="lchips">${chip('all', 'Todas')}${leagues.map((k) => chip(k, FC_SHORT[k] || FC_LEAGUES[k])).join('')}</div>
+    <div class="calk"><div class="card"><b>${upcoming.length}</b><span>partido${upcoming.length === 1 ? '' : 's'}</span></div>
+    <div class="card"><b>${firstTxt}</b><span>primer partido</span></div>
+    <div class="card"><b class="acc">${S.modelStatus && !S.modelStatus.startsWith('No se') ? '…' : nVal}</b><span>apuestas con valor</span></div></div>`;
+  if (!list.length) return html + `<div class="card empty">${S.updated ? 'No hay partidos en los próximos 7 días.' : 'Cargando partidos…'}</div>`;
+  let lastDay = '';
+  for (const a of list) {
     const ev = a.ev, day = fmtDay(ev.commence_time);
     if (day !== lastDay) { html += `${lastDay ? '</div>' : ''}<div class="day">${day}</div><div class="grid">`; lastDay = day; }
+    html += matchCard(a, S.fc === 'all' ? FC_SHORT[ev.sport_key] : '');
+  }
+  return html + '</div>';
+}
+function matchCard(a, tag) {
+  const ev = a.ev;
+  return `<div class="card mcard ${ev.state === 'post' ? 'done' : ''}" data-open="${esc(ev.id)}">${tag ? `<span class="ltag">${esc(tag)}</span>` : ''}
+      <div class="mrow">${ord(ev, teamBlock(ev.away_logo, ev.away_abbr || ev.away_team, ev.away_rec), teamBlock(ev.home_logo, ev.home_abbr || ev.home_team, ev.home_rec)).join(centerBlock(ev))}</div>
+      ${probBar(probsOf(a), ev)}
+    </div>`;
+}
+function viewHoy() {
+  if (S.liga === 'fc') return viewFutbol();
+  const days = calDays(), today = days[0];
+  const byDay = (k) => S.analysis.filter((a) => nightKey(a.ev.commence_time) === k);
+  if (S.calLiga !== sportKey()) { S.calLiga = sportKey(); S.calDay = null; }
+  if (!days.includes(S.calDay)) S.calDay = days.find((k) => byDay(k).some((a) => a.ev.state !== 'post')) || today;
+  const k = S.calDay, list = byDay(k);
+  const next = limaDay(keyDate(k).getTime() + 864e5);
+  const crosses = list.some((a) => limaDay(a.ev.commence_time) !== k);
+  const title = crosses ? `Noche del ${wd(k, 'long')} ${dnum(k)}${monthOf(k) !== monthOf(next) ? ' de ' + monthOf(k) : ''} al ${wd(next, 'long')} ${dnum(next)} de ${monthOf(next)}`
+    : `${cap(wd(k, 'long'))} ${dnum(k)} de ${monthOf(k)}`;
+  const chips = days.map((d) => { const n = byDay(d).length; return `<button class="calday ${d === k ? 'on' : ''} ${n ? '' : 'none'}" data-calday="${d}"><span>${d === today ? 'Hoy' : cap(wd(d, 'short'))}</span><b>${dnum(d)}</b></button>`; }).join('');
+  const first = list.map((a) => a.ev.commence_time).sort()[0];
+  const withOdds = list.filter((a) => a.ev.lines?.mlHome || a.markets?.length).length;
+  const startLab = S.liga === 'nba' ? 'primer salto' : S.liga === 'nfl' ? 'primer kickoff' : 'primer partido';
+  const kpis = `<div class="calk"><div class="card"><b>${list.length}</b><span>partido${list.length === 1 ? '' : 's'}</span></div>
+    <div class="card"><b>${first ? fmtTime(first) : '–'}</b><span>${startLab}</span></div>
+    <div class="card"><b>${withOdds ? withOdds : '–'}</b><span>${withOdds ? 'con cuotas de la casa' : 'cuotas y props: el mismo día'}</span></div></div>`;
+  let html = `<div class="calhead"><span class="calsub">${esc(cap(title))}</span><h2>Calendario</h2></div><div class="caldays">${chips}</div>${kpis}`;
+  if (!list.length) return html + `<div class="card empty">No hay partidos ${k === today ? 'hoy' : 'este día'} en esta liga.</div>`;
+  html += '<div class="grid">';
+  for (const a of list) {
+    const ev = a.ev;
     html += `<div class="card mcard ${ev.state === 'post' ? 'done' : ''}" data-open="${esc(ev.id)}">
       <div class="mrow">${ord(ev, teamBlock(ev.away_logo, ev.away_abbr || ev.away_team, ev.away_rec), teamBlock(ev.home_logo, ev.home_abbr || ev.home_team, ev.home_rec)).join(centerBlock(ev))}</div>
       ${probBar(probsOf(a), ev)}
@@ -405,7 +482,7 @@ const SIDE_LABEL = (ev, m, side, lines) => {
 function allPicks() {
   const out = [];
   for (const [ai, a] of S.analysis.entries()) {
-    const ev = a.ev, pr = ev.pred; if (!pr || ev.state !== 'pre') continue;
+    const ev = a.ev, pr = ev.pred; if (!pr || ev.state !== 'pre' || !fcVisible(a)) continue;
     for (const pk of pr.picks || []) {
       const mi = a.markets.findIndex((m) => m.market === pk.market);
       const m = a.markets[mi];
@@ -557,12 +634,31 @@ function legLiveHtml(it) {
   const txt = g.state === 'post' ? (g.ok ? 'Ganada' : 'Perdida') : g.ok ? 'Va ganando' : 'Va perdiendo';
   return `<div class="track ${cls}"><div class="trow"><span class="chip ${cls === 'ok' ? 'okc' : cls}">${txt}</span><span><b>${esc(g.score)}</b> · ${esc(g.detail)}</span></div></div>`;
 }
-function viewBets() {
-  const bets = getBets(); if (!bets.length) return '';
+// Estado de una apuesta registrada. Cuando se decide (ganada/perdida) se guarda en el registro para el perfil.
+function betState(b) {
+  if (b.result) return { live: b.legs.map(() => ({ state: 'post', p: b.result === 'won' ? 1 : 0 })), lost: b.result === 'lost', won: b.result === 'won', pNow: null };
+  const live = b.legs.map((it) => (it.pid ? propLiveP(it) : (gameLegLive(it) || { state: 'loading', p: null })));
+  const lost = live.some((l) => l.state === 'post' && l.p === 0), won = live.every((l) => l.state === 'post' && l.p === 1);
+  const allP = live.every((l) => l.p != null), pNow = allP ? prod(live.map((l) => l.p)) : null;
+  if (lost || won) {
+    const all = getBets(), x = all.find((y) => y.id === b.id);
+    if (x && !x.result) { x.result = won ? 'won' : 'lost'; x.settled = Date.now(); setBets(all); }
+  }
+  return { live, lost, won, pNow };
+}
+function betStats() {
+  const bets = getBets(); let staked = 0, ret = 0, won = 0, lost = 0, pend = 0, pendStake = 0;
+  for (const b of bets) {
+    const s = betState(b);
+    if (s.won) { won++; staked += b.stake; ret += b.odds ? b.stake * b.odds : b.stake; }
+    else if (s.lost) { lost++; staked += b.stake; }
+    else { pend++; pendStake += b.stake; }
+  }
+  return { n: bets.length, won, lost, pend, pendStake, staked, net: ret - staked, roi: staked ? (ret - staked) / staked : null, noOdds: bets.filter((b) => b.result === 'won' && !b.odds).length };
+}
+function viewBets() {  const bets = getBets(); if (!bets.length) return '';
   const rows = bets.map((b) => {
-    const live = b.legs.map((it) => (it.pid ? propLiveP(it) : (gameLegLive(it) || { state: 'loading', p: null })));
-    const lost = live.some((l) => l.state === 'post' && l.p === 0), won = live.every((l) => l.state === 'post' && l.p === 1);
-    const allP = live.every((l) => l.p != null), pNow = allP ? prod(live.map((l) => l.p)) : null;
+    const { live, lost, won, pNow } = betState(b);
     const status = lost ? ['bad', 'Perdida'] : won ? ['ok', 'Ganada'] : live.some((l) => l.state === 'in') ? ['warn', 'En juego'] : ['', 'Pendiente'];
     const payout = b.odds ? b.stake * b.odds : null;
     const fair = payout && pNow != null && !lost && !won ? payout * pNow : null;
@@ -584,12 +680,16 @@ function viewBets() {
 
 function viewPerfil() {
   if (isGuest()) return `<h2>Perfil</h2>` + lockCard('Tu perfil, tu bankroll y el registro de predicciones del modelo');
-  const u = S.user, r = registryStats();
+  const u = S.user, r = registryStats(), bs = betStats();
   const f3 = (x) => x.toFixed(3).replace('.', ',');
   return `<h2>Perfil</h2>
     <div class="card profile">${u.photo ? `<img src="${esc(u.photo)}" alt="">` : ''}<div><b>${esc(u.name || 'Invitado')}</b><div class="mut tiny">${esc(u.email || 'Invitado (sin cuenta de Google)')}</div></div></div>
     <div class="card" style="margin-top:10px"><label>Bankroll<br><input id="bankIn" type="number" min="0" value="${bankroll()}" style="margin-top:8px;font:inherit;background:var(--surf2);color:var(--ink);border:1px solid var(--edge);border-radius:8px;padding:8px;width:160px"></label></div>
-    <div class="card" style="margin-top:10px"><h4>REGISTRO DE PREDICCIONES</h4>
+    <div class="card" style="margin-top:10px"><h4>MIS RESULTADOS</h4>
+      ${bs.n ? `<div class="pnl"><div class="card"><span class="mut tiny">Ganancia neta</span><b class="${bs.net > 0 ? 'good' : bs.net < 0 ? 'bad' : ''}">${bs.net >= 0 ? '+' : '−'}${money(Math.abs(bs.net))}</b></div><div class="card"><span class="mut tiny">ROI</span><b class="${bs.roi > 0 ? 'good' : bs.roi < 0 ? 'bad' : ''}">${bs.roi == null ? '–' : signed((bs.roi * 100).toFixed(1)) + ' %'}</b></div><div class="card"><span class="mut tiny">Ganadas / perdidas</span><b>${bs.won} / ${bs.lost}</b></div><div class="card"><span class="mut tiny">Pendientes</span><b>${bs.pend}</b></div></div>
+      <p class="mut tiny">Apostado en apuestas cerradas: ${money(bs.staked)} · en juego o pendiente: ${money(bs.pendStake)}. Bankroll actual: <b>${money(bankroll() + bs.net)}</b> (inicial ${money(bankroll())} ${bs.net >= 0 ? '+' : '−'} ${money(Math.abs(bs.net))}).${bs.noOdds ? ` ${bs.noOdds} ganada(s) sin cuota registrada: cuentan sin ganancia.` : ''}</p>` : '<p class="mut tiny">Aún no registraste apuestas. Regístralas desde el Boleto y aquí verás tus ganancias y pérdidas.</p>'}
+    </div>
+    <div class="card" style="margin-top:10px"><h4>REGISTRO DE PREDICCIONES DEL MODELO</h4>
       <p class="mut tiny">Se guarda cada predicción antes del partido (en este navegador) y se compara con el resultado.</p>
       <div class="summary"><div class="card"><span class="mut tiny">Guardadas</span><b>${r.n}</b></div><div class="card"><span class="mut tiny">Con resultado</span><b>${r.settled}</b></div><div class="card"><span class="mut tiny">Con cuota</span><b>${r.mkt.n}</b></div></div>
       ${r.settled ? `<table><tr><th></th><th>Log-loss</th><th>Brier</th></tr><tr><td>Modelo</td><td>${f3(r.model.ll)}</td><td>${f3(r.model.br)}</td></tr>${r.mkt.n ? `<tr><td>Mercado</td><td>${f3(r.mkt.ll)}</td><td>${f3(r.mkt.br)}</td></tr>` : ''}</table><p class="mut tiny">Menos es mejor. Con pocos partidos no prueba nada.</p>` : '<p class="mut tiny">Aún no hay partidos terminados en el registro.</p>'}
@@ -612,7 +712,7 @@ const peek = (bucket, key) => { const c = D[bucket][key]; return c && !(c.v inst
 // Cuando llegan datos nuevos se vuelve a pintar, agrupando las llegadas (props carga cientos de jugadores)
 let rrTimer = null;
 const rerenderDetail = () => {
-  if (!(S.detail || S.tab === 'boleto' || S.tab === 'props')) return;
+  if (!(S.detail || S.tab === 'boleto' || S.tab === 'props' || S.tab === 'perfil')) return;
   if (document.activeElement?.matches?.('input, select')) return; // no interrumpir mientras escribes
   clearTimeout(rrTimer); rrTimer = setTimeout(render, 350);
 };
@@ -643,13 +743,12 @@ function detailHeader(ev) {
     : `${ev.state === 'in' ? '<span class="tag live">EN VIVO</span>' : ''}<b class="score">${scoreTxt(ev)}</b><span class="mut">${esc(ev.detail)}</span>`;
   const awayB = `<div class="tb big">${ev.away_logo ? `<img src="${esc(ev.away_logo)}" alt="">` : ''}<b>${esc(ev.away_abbr)}</b><span class="mut">${sub(ev.away_rec, 'road')}</span></div>`;
   const homeB = `<div class="tb big">${ev.home_logo ? `<img src="${esc(ev.home_logo)}" alt="">` : ''}<b>${esc(ev.home_abbr)}</b><span class="mut">${sub(ev.home_rec, 'home')}</span></div>`;
-  const tabBtn = (side) => `<button data-dtab="${side}" class="${S.detail.tab === side ? 'on' : ''}">Jugadores ${esc(side === 'home' ? ev.home_abbr : ev.away_abbr)}</button>`;
   return `<div class="dtop"><button class="icon-btn" data-act="back">‹</button><b>${esc(matchName(ev))}</b></div>
   <div class="hero">${ord(ev, awayB, homeB).join(`<div class="cb">${center}</div>`)}</div>
   <div class="seg wide">
     <button data-dtab="partido" class="${S.detail.tab === 'partido' ? 'on' : ''}">Partido</button>
     ${isSoccerEv(ev) ? `<button data-dtab="stats" class="${S.detail.tab === 'stats' ? 'on' : ''}">Estadísticas</button>` : ''}
-    ${ord(ev, tabBtn('away'), tabBtn('home')).join('')}
+    <button data-dtab="players" class="${S.detail.tab === 'players' ? 'on' : ''}">Jugadores</button>
   </div>`;
 }
 
@@ -659,8 +758,16 @@ function viewDetail() {
   const a = S.analysis[ai], ev = a.ev;
   if (!ev.path) return detailHeader(ev) + `<div class="card empty">El detalle completo usa datos de ESPN.</div>`;
   if (S.detail.player) return isGuest() ? detailHeader(ev) + lockCard('Perfil completo del jugador, línea ajustable y boleto') : playerProfile();
-  const body = S.detail.tab === 'partido' ? partidoTab(a, ai) : S.detail.tab === 'stats' ? statsTab(a) : playersTab(a, S.detail.tab);
+  const body = S.detail.tab === 'partido' ? partidoTab(a, ai) : S.detail.tab === 'stats' ? statsTab(a) : playersSub(a);
   return detailHeader(ev) + body;
+}
+
+// ----- Pestaña Jugadores: sub-selección del equipo -----
+function playersSub(a) {
+  const ev = a.ev;
+  if (S.detail.team !== 'home' && S.detail.team !== 'away') S.detail.team = ord(ev, 'away', 'home')[0];
+  const b = (side) => { const logo = side === 'home' ? ev.home_logo : ev.away_logo; return `<button data-dteam="${side}" class="${S.detail.team === side ? 'on' : ''}">${logo ? `<img src="${esc(logo)}" alt="">` : ''}Jugadores ${esc(side === 'home' ? ev.home_team : ev.away_team)}</button>`; };
+  return `<div class="teamseg">${ord(ev, b('away'), b('home')).join('')}</div>` + playersTab(a, S.detail.team);
 }
 
 // ----- Pestaña Partido -----
@@ -668,7 +775,7 @@ function partidoTab(a, ai) {
   const ev = a.ev;
   const sum = need('sum', ev.id, `${espnBase(ev.path)}/summary?event=${ev.id}`);
   if (isGuest()) return ganadorSection(a, ai) + lockCard('El porqué del %, todas las salidas del modelo, historial, bajas, detalles y otros mercados');
-  if (ev.path.startsWith('soccer')) return ganadorSection(a, ai) + soccerMarketsSection(a) + historySection(ev) + detailsSection(ev) + soccerBajasSection(ev, sum);
+  if (ev.path.startsWith('soccer')) return ganadorSection(a, ai) + historySection(ev) + detailsSection(ev) + soccerBajasSection(ev, sum) + soccerMarketsSection(a);
   return ganadorSection(a, ai) + historySection(ev) + injuriesSection(ev, sum) + detailsSection(ev) + marketsSection(a, ai);
 }
 
@@ -789,8 +896,15 @@ function whyBox(a) {
   const reason = (proS.length ? forFav[proS[0].label] : 'muy poco margen') + (conS.length ? `, aunque le resta ${forRiv[conS[0].label]}` : '');
   summary = `<b>${esc(favName)}</b> sale con <b>${pct1(favSide === 'home' ? pr.pHome : pr.pAway)}</b> (empate ${pct1(pr.pDraw)}), sobre todo por ${reason}. Goles esperados: ${H} <b>${num1(pr.xgHome)}</b> – ${A} <b>${num1(pr.xgAway)}</b>.`;
   const rel = (x, what) => `${x.toFixed(2).replace('.', ',')} (${x >= 1 ? '+' : '−'}${Math.round(Math.abs(x - 1) * 100)} % ${what})`;
+  if (w.cup) {
+    const c = w.cup, L = (x) => x.slug.toUpperCase();
+    steps.push(`<b>Liga de origen.</b> En copa no hay una sola tabla, así que cada equipo trae su rating de su propia liga: ${H} de <b>${L(c.h)}</b> (ataque ${n2(c.h.raw.att)}, defensa ${n2(c.h.raw.def)} frente a su liga) y ${A} de <b>${L(c.a)}</b> (ataque ${n2(c.a.raw.att)}, defensa ${n2(c.a.raw.def)}).`);
+    steps.push(`<b>Fuerza de cada liga.</b> Ser bueno en una liga débil vale menos: se recorta un poco el rating (^0,85, porque dominar tu liga exagera tu nivel) y se multiplica el ataque y se divide la defensa por la fuerza de la liga (Premier = 1, calibrada con el coeficiente UEFA): ${L(c.h)} ${n2(c.h.S)}, ${L(c.a)} ${n2(c.a.S)}. Queda ${H} ataque ${n2(rh.att)} / defensa ${n2(rh.def)} y ${A} ${n2(ra.att)} / ${n2(ra.def)}.`);
+    steps.push(`<b>Goles esperados.</b> Media de goles de las dos ligas ${n2(c.media)} × localía (${n2(c.hf)} local, ${n2(c.af)} visita) × ataque × defensa rival: ${H} <b>${n2(pr.xgHome)}</b>, ${A} <b>${n2(pr.xgAway)}</b>.`);
+  } else {
   steps.push(`<b>Fuerza de cada equipo.</b> Ataque y defensa relativos a la media de la liga, con la temporada actual mezclada con 15 partidos “ficticios” a su nivel de la temporada pasada (cuanto más se juega, más pesa lo actual). ${H} (${rh.gp} PJ): ataque ${rel(rh.att, 'que la media')}, defensa ${rel(rh.def, 'goles que la media')}${rh.promoted ? ' · sin temporada anterior: tratado como ascendido' : ''}. ${A} (${ra.gp} PJ): ataque ${rel(ra.att, 'que la media')}, defensa ${rel(ra.def, 'goles que la media')}${ra.promoted ? ' · sin temporada anterior: tratado como ascendido' : ''}. En defensa, menos de 1 es mejor.`);
   steps.push(`<b>Goles esperados.</b> ${H}: ${n2(w.homeAvg)} (media de goles del local en la liga) × 1,04 × ataque ${n2(rh.att)} × defensa rival ${n2(ra.def)} = <b>${n2(pr.xgHome)}</b>. ${A}: ${n2(w.awayAvg)} × 1,04 × ${n2(ra.att)} × ${n2(rh.def)} = <b>${n2(pr.xgAway)}</b>.`);
+  }
   steps.push(`<b>De goles a probabilidad.</b> Se juegan 50.000 partidos: los goles de cada equipo salen de una Poisson con una pequeña variación de forma (gamma, ±10 %). ${H} gana el <b>${pct1(pr.pHome)}</b>, empate <b>${pct1(pr.pDraw)}</b>, ${A} <b>${pct1(pr.pAway)}</b>. El empate sube cuando los goles esperados son bajos y parecidos. Tope de favorito: 85 %.${w.live ? ' Partido en juego: solo se simula el tiempo que queda, partiendo del marcador actual.' : ''}`);
   if (pr.mktHome != null) steps.push(`<b>Frente a la casa.</b> Sin margen, la casa da ${H} ${pct1(pr.mktHome)} · X ${pct1(pr.mktDraw)} · ${A} ${pct1(pr.mktAway)}. Mayor diferencia: <b>${num1(pr.maxPP)} pp</b>${pr.maxPP > 10 ? ' (más de 10 pp → “Revisar”: el modelo no ve bajas, alineaciones ni motivación)' : ''}.`);
   return `<div class="card why"><h4>¿POR QUÉ ESTE %?</h4><p class="wsum">${summary}</p>${bars(rows.map((r) => ({ ...r, v: r.v * 100 })), '% más goles')}<ol class="steps">${steps.map((s) => `<li>${s}</li>`).join('')}</ol></div>`;
@@ -1077,14 +1191,16 @@ Object.assign(STATS, {
   SOT: { label: 'Tiros a puerta', short: 'A puerta', f: (s) => s.sot, soccer: true },
   SH: { label: 'Tiros', short: 'Tiros', f: (s) => s.sh, soccer: true },
   SV: { label: 'Atajadas', short: 'Atajadas', f: (s) => s.sv, soccer: true },
+  SG: { label: 'Goles', short: 'Goles', f: (s) => s.goals, soccer: true },
   SAST: { label: 'Asistencias', short: 'Asist.', f: (s) => s.assists, soccer: true },
+  SGA: { label: 'Gol o asistencia', short: 'G+A', f: (s) => (s.goals || 0) + (s.assists || 0), soccer: true },
   FC: { label: 'Faltas cometidas', short: 'Faltas com.', f: (s) => s.fouls, soccer: true },
   FS: { label: 'Faltas recibidas', short: 'Faltas rec.', f: (s) => s.fs, soccer: true },
   OFF: { label: 'Fueras de juego', short: 'Offsides', f: (s) => s.off, soccer: true },
 });
 const STAT_ORDER = ['PTS', 'REB', 'AST', '3PM', '3PA', 'PRA', 'PR', 'PA', 'RA', 'FGM', 'FGA', 'FTM', 'FTA', 'STL', 'BLK', 'TO'];
 // Las amarillas NO son mercado: solo un indicador (últimas 5) de lo faltero que es el jugador
-const SOC_FIELD = ['SOT', 'SH', 'SAST', 'FC', 'FS', 'OFF'], SOC_GK = ['SV'], SOC_ALL = [...SOC_FIELD, 'SV'];
+const SOC_FIELD = ['SOT', 'SH', 'SG', 'SAST', 'SGA', 'FC', 'FS', 'OFF'], SOC_GK = ['SV'], SOC_ALL = [...SOC_FIELD, 'SV'];
 const CHIP = { PRA: 'P+R+A', PR: 'P+R', PA: 'P+A', RA: 'R+A' };
 const isGK = (p) => /^(G|GK)$/i.test(p?.position?.abbreviation || '') || /goalkeeper/i.test(p?.position?.name || '');
 function statTabs(stat, keys = STAT_ORDER) {
@@ -1406,7 +1522,7 @@ function liveStat(it) {
       out.found = true; out.starter = r.starter; out.subbedOut = r.subbedOut;
       const v = Object.fromEntries((r.stats || []).map((s) => [s.name, +s.value || +s.displayValue || 0]));
       out.box = v;
-      out.cur = { SOT: v.shotsOnTarget, SH: v.totalShots, SV: v.saves, YC: v.yellowCards, SAST: v.goalAssists, FC: v.foulsCommitted, FS: v.foulsSuffered, OFF: v.offsides }[it.stat] ?? 0;
+      out.cur = { SOT: v.shotsOnTarget, SH: v.totalShots, SV: v.saves, YC: v.yellowCards, SG: v.totalGoals, SAST: v.goalAssists, SGA: (+v.totalGoals || 0) + (+v.goalAssists || 0), FC: v.foulsCommitted, FS: v.foulsSuffered, OFF: v.offsides }[it.stat] ?? 0;
     }
     const m = parseInt(out.clock) || (state === 'post' ? 90 : 0);
     out.elapsed = Math.min(1, m / 90);
@@ -1501,7 +1617,7 @@ function bestLine(pr, soccer, stat) {
   return best;
 }
 function propsGames() {
-  const live = S.analysis.filter((a) => a.ev.state !== 'post' && a.ev.path);
+  const live = S.analysis.filter((a) => a.ev.state !== 'post' && a.ev.path && fcVisible(a));
   const today = limaDay(Date.now());
   const todays = live.filter((a) => limaDay(a.ev.commence_time) === today);
   if (todays.length) return todays;
@@ -1823,48 +1939,40 @@ function soccerMarketsSection(a) {
     ${stepper('ah', M.ah, `${esc(M.ahSide === 'home' ? ev.home_abbr : ev.away_abbr)} ${signed(ahLine)}`, M.ahSide === 'home' ? 0.25 : -0.25)}
     <div class="mkn"><div><span>Gana</span><b class="${rateCls(ahE.win)}">${pctEs(ahE.win)}</b></div><div><span>Devuelve</span><b>${pctEs(ahE.push)}</b></div><div><span>Cuota justa</span><b class="acc">${ahE.p ? fmtOdd(1 / ahE.p) : '–'}</b></div><div><span>Casa</span><b>${ahItem.price ? fmtOdd(ahItem.price) : '–'}</b></div></div>
     <button class="btn ${inSlipSpec(ahItem.spec) ? 'ghost' : 'google'} sm" data-gadd="${esc(ahItem.spec)}">${inSlipSpec(ahItem.spec) ? '✓ En boleto' : '+ Boleto'}</button></div>`;
-  const gO = gItem(ev, 'totals', 'over', M.goals), gU = gItem(ev, 'totals', 'under', M.goals);
-  const goals = `<div class="card mk2"><div class="mkh"><span class="mut">Goles del partido</span><span class="mut tiny">xG ${num1(pr.xgHome + pr.xgAway)}</span></div>
-    ${stepper('goals', M.goals, null, 0.5)}
-    ${mrow(gO, 'Más de ' + fmtL(M.goals))}${mrow(gU, 'Menos de ' + fmtL(M.goals))}</div>`;
-  // Córners (de las estadísticas de sus últimos partidos)
-  const sm = statModel(ev);
-  let corners;
-  if (!sm) corners = `<div class="card mk2"><div class="mkh"><span class="mut">Córners</span></div><p class="mut tiny">${sm === null ? 'No disponible.' : 'Cargando estadísticas…'}</p></div>`;
-  else {
-    const lam = statLambda(sm, 'wonCorners', 'all');
-    const key = 'st:wonCorners:all';
-    M[key] ??= lam != null ? Math.floor(lam) + 0.5 : 9.5;
-    const cO = gItem(ev, 'stat', 'over', M[key], 'wonCorners', 'all'), cU = gItem(ev, 'stat', 'under', M[key], 'wonCorners', 'all');
-    corners = `<div class="card mk2"><div class="mkh"><span class="mut">Córners</span><span class="mut tiny">esperados ${num1(lam)}</span></div>
-      ${stepper(key, M[key], null, 1)}${mrow(cO, 'Más de ' + fmtL(M[key]))}${mrow(cU, 'Menos de ' + fmtL(M[key]))}
-      <button class="linkbtn" data-dtab="stats">Córners por equipo y más estadísticas ›</button></div>`;
-  }
+  // Ganador del 1.er tiempo (siempre visible, con su probabilidad y botón al boleto)
   const hd = htDist(ev);
-  const ht = `<button class="card mk2 htbtn ${M.ht ? 'on' : ''}" data-mset="ht|${M.ht ? '' : '1'}"><div class="mkh"><span class="mut">Mercados de 1.er tiempo</span><span>${M.ht ? '▲' : '▼'}</span></div>
-    ${hd ? `<div class="mkn"><div><span>Gol antes del descanso</span><b>${pctEs(1 - (hd[`${+ev.score?.[1] || 0}-${+ev.score?.[0] || 0}`] || 0))}</b></div><div><span>Gana ${esc(ev.home_abbr)} al descanso</span><b>${pctEs(gameProb(ev, 'ht1x2', 'home'))}</b></div></div><span class="mut tiny">Toca para ver ganador y goles del 1.er tiempo</span>` : '<p class="mut tiny">El primer tiempo ya terminó.</p>'}</button>`;
-  let htPanel = '';
-  if (M.ht && hd) {
-    M.htGoals ??= 0.5;
-    const order = ord(ev, 'away', 'home');
-    htPanel = `<div class="card"><h4>1.ER TIEMPO</h4>
-      ${[order[0], 'draw', order[1]].map((s) => mrow(gItem(ev, 'ht1x2', s), s === 'draw' ? 'Empate al descanso' : `Gana ${s === 'home' ? ev.home_abbr : ev.away_abbr} al descanso`)).join('')}
-      <div class="mkh" style="margin-top:10px"><span class="mut">Goles del 1.er tiempo</span>${stepper('htGoals', M.htGoals, null, 1)}</div>
-      ${mrow(gItem(ev, 'httotals', 'over', M.htGoals), 'Más de ' + fmtL(M.htGoals))}${mrow(gItem(ev, 'httotals', 'under', M.htGoals), 'Menos de ' + fmtL(M.htGoals))}
-      <p class="mut tiny">Se asume que antes del descanso se marca ≈45 % de los goles esperados del partido.</p></div>`;
-  }
-  return `<div class="sec"><h4>OTROS MERCADOS</h4><span class="mut tiny">mueve la línea con − / +</span></div>
-    <div class="mks2">${hand}${goals}${corners}${ht}</div>${htPanel}
-    <p class="mut tiny">Hándicap y goles salen de la distribución de marcadores del modelo (50.000 simulaciones). En líneas de cuarto (−0,25, −0,75…) la mitad va a cada línea. Cuota casa solo si coincide con la línea de ${esc(ev.provider || 'la casa')}.</p>`;
+  const order = ord(ev, 'away', 'home');
+  const ht = `<div class="card mk2"><div class="mkh"><span class="mut">Ganador del 1.er tiempo</span><span class="mut tiny">xG 1T ${num1((pr.xgHome + pr.xgAway) * 0.45)}</span></div>
+    ${hd ? [order[0], 'draw', order[1]].map((s) => mrow(gItem(ev, 'ht1x2', s), s === 'draw' ? 'Empate al descanso' : `Gana ${s === 'home' ? ev.home_abbr : ev.away_abbr} al descanso`)).join('') : '<p class="mut tiny">El primer tiempo ya terminó.</p>'}
+    <button class="linkbtn" data-dtab="stats">Goles, córners y más estadísticas ›</button></div>`;
+  return `<div class="sec"><h4>HÁNDICAP Y 1.ER TIEMPO</h4><span class="mut tiny">mueve la línea con − / +</span></div>
+    <div class="mks2">${hand}${ht}</div>
+    <p class="mut tiny">Salen de la distribución de marcadores del modelo (50.000 simulaciones). En líneas de cuarto (−0,25, −0,75…) la mitad va a cada línea. Al descanso se asume ≈45 % de los goles esperados. Cuota casa solo si coincide con la línea de ${esc(ev.provider || 'la casa')}.</p>`;
 }
 
+// Fútbol · Estadísticas: tarjeta de goles (total, ambos marcan y 1.er tiempo)
+function goalsCard(ev) {
+  const pr = ev.pred, L = ev.lines || {}, M = mstate();
+  if (!pr?.dist) return `<div class="card"><h4>GOLES</h4><p class="mut tiny">${S.modelStatus && !S.modelStatus.includes('N/D') ? 'Calculando el modelo…' : 'Modelo no disponible para este partido.'}</p></div>`;
+  M.goals ??= L.total ?? 2.5;
+  M.htGoals ??= 0.5;
+  const hd = htDist(ev);
+  const order = ord(ev, 'away', 'home');
+  return `<div class="card"><h4>GOLES</h4>
+    <div class="cbig">${order.map((s) => `<div><span class="mut">${esc(s === 'home' ? ev.home_abbr : ev.away_abbr)}</span><b>${num1(s === 'home' ? pr.xgHome : pr.xgAway)}</b></div>`).join(`<div><span class="mut">Total</span><b class="acc">${num1(pr.xgHome + pr.xgAway)}</b></div>`)}</div>
+    <div class="strow"><div class="sthead"><b>Partido</b><span class="mut tiny">goles esperados ${num1(pr.xgHome + pr.xgAway)}</span>${stepper('goals', M.goals, null, 0.5)}</div>
+      ${mrow(gItem(ev, 'totals', 'over', M.goals), 'Más de ' + fmtL(M.goals))}${mrow(gItem(ev, 'totals', 'under', M.goals), 'Menos de ' + fmtL(M.goals))}</div>
+    <div class="strow"><div class="sthead"><b>Ambos marcan</b></div>${mrow(gItem(ev, 'btts', 'yes'), 'Sí')}${mrow(gItem(ev, 'btts', 'no'), 'No')}</div>
+    ${hd ? `<div class="strow"><div class="sthead"><b>1.er tiempo</b><span class="mut tiny">esperados ${num1((pr.xgHome + pr.xgAway) * 0.45)}</span>${stepper('htGoals', M.htGoals, null, 1)}</div>
+      ${mrow(gItem(ev, 'httotals', 'over', M.htGoals), 'Más de ' + fmtL(M.htGoals))}${mrow(gItem(ev, 'httotals', 'under', M.htGoals), 'Menos de ' + fmtL(M.htGoals))}</div>` : ''}</div>`;
+}
 // Fútbol · pestaña Estadísticas: córners primero y luego el resto de mercados de estadísticas
 function statsTab(a) {
   const ev = a.ev;
   if (isGuest()) return lockCard('Córners, tarjetas, tiros y más estadísticas del partido');
   const sm = statModel(ev);
-  if (sm === undefined) return `<div class="card empty">Cargando estadísticas de los últimos partidos…</div>`;
-  if (!sm) return `<div class="card empty">Estadísticas no disponibles para este partido.</div>`;
+  if (sm === undefined) return goalsCard(ev) + `<div class="card empty">Cargando estadísticas de los últimos partidos…</div>`;
+  if (!sm) return goalsCard(ev) + `<div class="card empty">Estadísticas no disponibles para este partido.</div>`;
   const M = mstate();
   const rowsFor = (sname, team) => {
     const lam = statLambda(sm, sname, team); if (lam == null) return '';
@@ -1885,13 +1993,13 @@ function statsTab(a) {
     <tr class="mut tiny"><td></td><td>a favor</td><td>en contra</td><td>a favor</td><td>en contra</td></tr>
     ${Object.entries(TSTAT).map(([k, d]) => `<tr><td>${esc(d.label)}</td><td><b>${fmtS(T1[1].for[k], k)}</b></td><td>${fmtS(T1[1].against[k], k)}</td><td><b>${fmtS(T2[1].for[k], k)}</b></td><td>${fmtS(T2[1].against[k], k)}</td></tr>`).join('')}</table></div>
     <p class="mut tiny">Últimos ${sm.H.n} partidos de ${esc(ev.home_abbr)} y ${sm.A.n} de ${esc(ev.away_abbr)} en esta competición (ESPN).</p></div>`;
-  return `${sm.loading ? `<p class="mut tiny">Cargando ${sm.loading} partidos…</p>` : ''}${cornersCard}${others}${table}
+  return `${sm.loading ? `<p class="mut tiny">Cargando ${sm.loading} partidos…</p>` : ''}${goalsCard(ev)}${cornersCard}${others}${table}
     <p class="mut tiny">Esperado = media entre lo que hace cada equipo y lo que le hacen a su rival. Probabilidad con Poisson; la línea se mueve con − / +. Antes del partido; en directo no se recalcula.</p>`;
 }
 
 // ---------- Directo de la apuesta: marcador por periodos y gráfica de la estadística vs lo esperado ----------
 const liveSum = (it) => need('live', it.eventId + '|' + Math.floor(Date.now() / 30000), `${espnBase(it.path)}/summary?event=${it.eventId}`);
-const ZERO = { points: 0, reb: 0, ast: 0, tpm: 0, tpa: 0, fgm: 0, fga: 0, ftm: 0, fta: 0, stl: 0, blk: 0, to: 0, sh: 0, sot: 0, sv: 0, yc: 0, assists: 0, fouls: 0, fs: 0, off: 0 };
+const ZERO = { points: 0, reb: 0, ast: 0, tpm: 0, tpa: 0, fgm: 0, fga: 0, ftm: 0, fta: 0, stl: 0, blk: 0, to: 0, sh: 0, sot: 0, sv: 0, yc: 0, goals: 0, assists: 0, fouls: 0, fs: 0, off: 0 };
 const nbaT = (period, clock) => {
   const s = String(clock || '0'); const left = s.includes(':') ? +s.split(':')[0] + (+s.split(':')[1] || 0) / 60 : (parseFloat(s) || 0) / 60;
   return period <= 4 ? (period - 1) * 12 + (12 - left) : 48 + (period - 5) * 5 + (5 - left);
@@ -1995,7 +2103,7 @@ function liveLegCard(it, sum) {
   const ser = sum && L && L.state !== 'pre' ? statSeries(sum, it) : null;
   const box = L?.box || {};
   const tiles = soccer
-    ? [['Tiros', box.totalShots], ['A puerta', box.shotsOnTarget], ['Asist.', box.goalAssists], ['Faltas', box.foulsCommitted], ['F. recib.', box.foulsSuffered], ['Offsides', box.offsides], ...(it.stat === 'SV' ? [['Atajadas', box.saves]] : [])]
+    ? [['Goles', box.totalGoals], ['Tiros', box.totalShots], ['A puerta', box.shotsOnTarget], ['Asist.', box.goalAssists], ['Faltas', box.foulsCommitted], ['F. recib.', box.foulsSuffered], ['Offsides', box.offsides], ...(it.stat === 'SV' ? [['Atajadas', box.saves]] : [])]
     : [['MIN', L?.min], ['PTS', box.points], ['REB', box.reb], ['AST', box.ast], ['3PM', box.tpm], ['TC', box.fga != null ? `${box.fgm}-${box.fga}` : null]];
   const want = it.side === 'under' ? 'Menos' : 'Más';
   return `<div class="lcard lc-${st[0]}">
@@ -2035,6 +2143,9 @@ function legNow(it) {
 document.addEventListener('click', (e) => {
   const t = e.target.closest('button,[data-open],[data-pl],[data-openpl]');
   if (!t) return;
+  if (t.dataset.calday) { S.calDay = t.dataset.calday; return render(); }
+  if (t.dataset.fcf) { S.fc = t.dataset.fcf; store.set('fc', S.fc); return render(); }
+  if (t.dataset.dteam) { S.detail.team = t.dataset.dteam; return render(); }
   // Props
   const P = S.props;
   if (t.dataset.pstat) { P.stat = t.dataset.pstat; return render(); }
@@ -2135,16 +2246,15 @@ const recs = (c) => {
   const r = {}; for (const x of c.records || []) r[x.type] = x.summary; return r; // total, home, road
 };
 async function fetchEspn() {
-  const sk = sportKey(), path = ESPN[sk];
-  const days = sk.startsWith('soccer') || sk.includes('nfl') ? 7 : 3;
-  const dates = Array.from({ length: days }, (_, i) => limaDay(Date.now() + i * 864e5).replace(/-/g, ''));
-  const base = `https://site.api.espn.com/apis/site/v2/sports/${path}`;
-  const pages = await Promise.all(dates.map((d) => fetch(`${base}/scoreboard?dates=${d}`).then((r) => (r.ok ? r.json() : { events: [] })).catch(() => ({ events: [] }))));
+  // 7 noches desde hoy (+1 día para los partidos de madrugada de la última). En fútbol, todas las ligas y copas.
+  const dates = Array.from({ length: 8 }, (_, i) => limaDay(Date.now() - 6 * 36e5 + i * 864e5).replace(/-/g, ''));
+  const jobs = leagueKeys().flatMap((sk) => dates.map((d) => ({ sk, path: ESPN[sk], d })));
+  const pages = await Promise.all(jobs.map((j) => fetch(`https://site.api.espn.com/apis/site/v2/sports/${j.path}/scoreboard?dates=${j.d}`).then((r) => (r.ok ? r.json() : { events: [] })).catch(() => ({ events: [] }))));
   const seen = new Set(), raw = [];
-  for (const p of pages) for (const e of p.events || []) if (!seen.has(e.id)) { seen.add(e.id); raw.push(e); }
+  pages.forEach((p, i) => { for (const e of p.events || []) if (!seen.has(e.id)) { seen.add(e.id); raw.push([e, jobs[i].sk, jobs[i].path]); } });
   if (!raw.length && pages.every((p) => !p.events)) throw new Error('No se pudo conectar con ESPN');
 
-  return raw.map((e) => {
+  return raw.map(([e, sk, path]) => {
     const c = e.competitions[0];
     const home = c.competitors.find((x) => x.homeAway === 'home'), away = c.competitors.find((x) => x.homeAway === 'away');
     const H = home.team.displayName, A = away.team.displayName;
@@ -2185,7 +2295,8 @@ function route() {
   else {
     const id = decodeURIComponent(m[1]), prev = S.detail && S.detail.id === id ? S.detail : null;
     // Al entrar y salir del perfil se conservan mercado, líneas, filtros y pestaña
-    S.detail = { id, tab: m[2] || prev?.tab || 'partido', hist: prev?.hist || { team: 'home', n: 10, side: 'all' },
+    const tab0 = m[2] || prev?.tab || 'partido';
+    S.detail = { id, tab: tab0 === 'home' || tab0 === 'away' ? 'players' : tab0, team: m[2] || prev?.team || null, hist: prev?.hist || { team: 'home', n: 10, side: 'all' },
       stat: prev?.stat, lines: prev?.lines || {}, m: prev?.m, price: prev?.price || {}, pick: prev?.pick || 'over',
       pf: prev?.pf || { tramo: 'l10', side: 'all', minMin: 0, rest: 'all' }, pside: m[2] || null, player: m[3] || null };
     if (m[3] && prev?.player !== m[3]) S.detail.pf = { tramo: 'l10', side: 'all', minMin: 0, rest: 'all' };
