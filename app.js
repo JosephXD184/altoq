@@ -1,5 +1,5 @@
 // ALTOQ · login con Google (Firebase), cuotas en tiempo real (The Odds API) y detector de valor (EV+).
-import { modelFor, pendingReason, summaryFor, logPrediction, settleResults, registryStats } from './model.js?v=12';
+import { modelFor, pendingReason, summaryFor, logPrediction, settleResults, registryStats } from './model.js?v=13';
 const CFG = window.RUSHTOP_CONFIG || {};
 const TZ = 'America/Lima';
 const $ = (s) => document.querySelector(s);
@@ -624,9 +624,10 @@ function gameLegLive(it) {
   else if (it.mk === 'totals') ok = ou(hs + as);
   else if (it.mk === 'spreads') ok = sel === 'home' ? hs + it.point > as : as + it.point > hs;
   else if (it.mk === 'btts') ok = (hs > 0 && as > 0) === (sel === 'yes');
-  else if (it.mk === 'ht1x2' || it.mk === 'httotals') {
+  else if (it.mk === 'teamtotals') { const v = it.team === 'home' ? hs : as; ok = ou(v); extra = `${v} gol${v === 1 ? '' : 'es'} de ${(it.team === 'home' ? H : A)?.team?.abbreviation || ''}`; }
+  else if (it.mk === 'ht1x2' || it.mk === 'httotals' || it.mk === 'htteam') {
     const h1 = +H?.linescores?.[0]?.displayValue || 0, a1 = +A?.linescores?.[0]?.displayValue || 0;
-    ok = it.mk === 'httotals' ? ou(h1 + a1) : sel === 'draw' ? h1 === a1 : sel === 'home' ? h1 > a1 : a1 > h1;
+    ok = it.mk === 'htteam' ? ou(it.team === 'home' ? h1 : a1) : it.mk === 'httotals' ? ou(h1 + a1) : sel === 'draw' ? h1 === a1 : sel === 'home' ? h1 > a1 : a1 > h1;
     if (state === 'in' && (st.period || 0) >= 2) state = 'post'; // el 1.er tiempo ya terminó
     extra = `1.er tiempo ${h1}-${a1}`;
   } else if (it.mk === 'stat') {
@@ -2053,6 +2054,10 @@ function gameProb(ev, mk, sel, point, sname, team) {
     if (mk === 'spreads' && dist) return evalLine(dist, (h, a, l) => (sel === 'home' ? h - a : a - h) + l, point).p;
     if (mk === 'totals' && dist) return evalLine(dist, (h, a, l) => (sel === 'over' ? h + a - l : l - h - a), point).p;
     if (mk === 'btts') return sel === 'yes' ? pr.pBTTS : 1 - pr.pBTTS;
+    // goles de un solo equipo: x = goles de ese equipo en cada marcador
+    const oneTeam = (d) => evalLine(d, (h, a, l) => { const x = team === 'home' ? h : a; return sel === 'over' ? x - l : l - x; }, point).p;
+    if (mk === 'teamtotals' && dist) return oneTeam(dist);
+    if (mk === 'htteam') { const d = htDist(ev); return d ? oneTeam(d) : null; }
     if (mk === 'ht1x2' || mk === 'httotals') {
       const d = htDist(ev); if (!d) return null;
       if (mk === 'httotals') return evalLine(d, (h, a, l) => (sel === 'over' ? h + a - l : l - h - a), point).p;
@@ -2088,10 +2093,12 @@ function legLabel(ev, mk, sel, point, sname, team) {
   if (mk === 'btts') return `Ambos marcan: ${sel === 'yes' ? 'Sí' : 'No'}`;
   if (mk === 'ht1x2') return `1.er tiempo: ${tm(sel)}`;
   if (mk === 'httotals') return `1.er tiempo: ${ou} de ${fmtL(point)} goles`;
+  if (mk === 'teamtotals') return `${ou} de ${fmtL(point)} goles de ${ab(team)}`;
+  if (mk === 'htteam') return `1.er tiempo: ${ou} de ${fmtL(point)} goles de ${ab(team)}`;
   if (mk === 'stat') return `${ou} de ${fmtL(point)} ${TSTAT[sname].short}${team !== 'all' ? ' de ' + ab(team) : ' (total)'}`;
   return '';
 }
-const MK_NAME = { h2h: 'Ganador', spreads: 'Hándicap', totals: 'Total', btts: 'Ambos marcan', ht1x2: '1.er tiempo', httotals: 'Goles 1.er tiempo', stat: 'Estadísticas' };
+const MK_NAME = { h2h: 'Ganador', spreads: 'Hándicap', totals: 'Total', btts: 'Ambos marcan', ht1x2: '1.er tiempo', httotals: 'Goles 1.er tiempo', teamtotals: 'Goles de un equipo', htteam: 'Goles de un equipo 1.er tiempo', stat: 'Estadísticas' };
 const gSpec = (ev, mk, sel, point = '', sname = '', team = '') => [ev.id, mk, sel, point, sname, team].join('~');
 const gId = (spec) => 'g|' + spec;
 function specParts(spec) {
@@ -2179,13 +2186,24 @@ function goalsCard(ev) {
   M.htGoals ??= 0.5;
   const hd = htDist(ev);
   const order = ord(ev, 'away', 'home');
+  const abbr = (s) => (s === 'home' ? ev.home_abbr : ev.away_abbr);
+  // Goles de un solo equipo (partido completo y 1.er tiempo), cada uno con su línea
+  const teamRows = (mk, s, key, def, step, xg) => {
+    M[key] ??= def;
+    return `<div class="strow"><div class="sthead"><b>${mk === 'htteam' ? '1.er tiempo · ' : ''}Goles de ${esc(abbr(s))}</b><span class="mut tiny">esperados ${num1(xg)}</span>${stepper(key, M[key], null, step)}</div>
+      ${mrow(gItem(ev, mk, 'over', M[key], '', s), 'Más de ' + fmtL(M[key]))}${mrow(gItem(ev, mk, 'under', M[key], '', s), 'Menos de ' + fmtL(M[key]))}</div>`;
+  };
+  const xgOf = (s) => (s === 'home' ? pr.xgHome : pr.xgAway);
+  const teamFull = order.map((s) => teamRows('teamtotals', s, 'tg_' + s, Math.floor(xgOf(s)) + 0.5, 0.5, xgOf(s))).join('');
+  const teamHt = hd ? order.map((s) => teamRows('htteam', s, 'ht_' + s, 0.5, 1, xgOf(s) * 0.45)).join('') : '';
   return `<div class="card"><h4>GOLES</h4>
     <div class="cbig">${order.map((s) => `<div><span class="mut">${esc(s === 'home' ? ev.home_abbr : ev.away_abbr)}</span><b>${num1(s === 'home' ? pr.xgHome : pr.xgAway)}</b></div>`).join(`<div><span class="mut">Total</span><b class="acc">${num1(pr.xgHome + pr.xgAway)}</b></div>`)}</div>
     <div class="strow"><div class="sthead"><b>Partido</b><span class="mut tiny">goles esperados ${num1(pr.xgHome + pr.xgAway)}</span>${stepper('goals', M.goals, null, 0.5)}</div>
       ${mrow(gItem(ev, 'totals', 'over', M.goals), 'Más de ' + fmtL(M.goals))}${mrow(gItem(ev, 'totals', 'under', M.goals), 'Menos de ' + fmtL(M.goals))}</div>
+    ${teamFull}
     <div class="strow"><div class="sthead"><b>Ambos marcan</b></div>${mrow(gItem(ev, 'btts', 'yes'), 'Sí')}${mrow(gItem(ev, 'btts', 'no'), 'No')}</div>
     ${hd ? `<div class="strow"><div class="sthead"><b>1.er tiempo</b><span class="mut tiny">esperados ${num1((pr.xgHome + pr.xgAway) * 0.45)}</span>${stepper('htGoals', M.htGoals, null, 1)}</div>
-      ${mrow(gItem(ev, 'httotals', 'over', M.htGoals), 'Más de ' + fmtL(M.htGoals))}${mrow(gItem(ev, 'httotals', 'under', M.htGoals), 'Menos de ' + fmtL(M.htGoals))}</div>` : ''}</div>`;
+      ${mrow(gItem(ev, 'httotals', 'over', M.htGoals), 'Más de ' + fmtL(M.htGoals))}${mrow(gItem(ev, 'httotals', 'under', M.htGoals), 'Menos de ' + fmtL(M.htGoals))}</div>${teamHt}` : ''}</div>`;
 }
 // Fútbol · pestaña Estadísticas: córners primero y luego el resto de mercados de estadísticas
 function statsTab(a) {
