@@ -1,5 +1,5 @@
 // ALTOQ · login con Google (Firebase), cuotas en tiempo real (The Odds API) y detector de valor (EV+).
-import { modelFor, pendingReason, summaryFor, logPrediction, settleResults, registryStats } from './model.js?v=10';
+import { modelFor, pendingReason, summaryFor, logPrediction, settleResults, registryStats } from './model.js?v=11';
 const CFG = window.RUSHTOP_CONFIG || {};
 const TZ = 'America/Lima';
 const $ = (s) => document.querySelector(s);
@@ -1518,8 +1518,10 @@ const SOFA = 'https://www.sofascore.com/api/v1';
 const SF = { team: store.get('sofaTeams', {}), ev: {}, miss: {}, abs: {}, busy: {} };
 const normN = (s) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// Si Sofascore rechaza las peticiones de esta web (403), se deja de intentar en esta sesión
+const sofaJ = (u) => (SF.blocked ? Promise.resolve(null) : fetch(u).then((r) => { if (r.status === 403) SF.blocked = true; return r.ok ? r.json() : null; }).catch(() => null));
 async function sofaCandidates(name) {
-  const j = await getJ(`${SOFA}/search/teams?q=${encodeURIComponent(name)}`);
+  const j = await sofaJ(`${SOFA}/search/teams?q=${encodeURIComponent(name)}`);
   return (j?.results || []).map((r) => r.entity).filter((e) => e && e.sport?.slug === 'football' && e.gender !== 'F' && !e.national && !/\b(II|B|U\d\d|Youth|Reserves?)\b/i.test(e.name)).slice(0, 3).map((e) => e.id);
 }
 // Partido de Sofascore equivalente: mismo equipo y misma hora (±3 h)
@@ -1529,7 +1531,7 @@ async function sofaEventFor(ev) {
   for (const [side, name, espnId] of [['home', ev.home_team, ev.home_id], ['away', ev.away_team, ev.away_id]]) {
     const ids = SF.team[espnId] ? [SF.team[espnId]] : await sofaCandidates(name);
     for (const id of ids) for (const kind of ev.state === 'pre' ? ['next'] : ['last', 'next']) {
-      const j = await getJ(`${SOFA}/team/${id}/events/${kind}/0`);
+      const j = await sofaJ(`${SOFA}/team/${id}/events/${kind}/0`);
       const e = (j?.events || []).find((x) => Math.abs(x.startTimestamp - ts) < 3 * 3600);
       if (!e) continue;
       SF.team[espnId] = id; store.set('sofaTeams', SF.team);
@@ -1545,10 +1547,11 @@ async function sofaMissing(ev) {
   const se = await sofaEventFor(ev);
   let v = null;
   if (se) {
-    const l = await getJ(`${SOFA}/event/${se.id}/lineups`);
+    const l = await sofaJ(`${SOFA}/event/${se.id}/lineups`);
     const side = (s) => (l?.[s]?.missingPlayers || []).map((m) => ({ name: m.player?.name, pos: m.player?.position, type: m.type, desc: m.description || '', end: m.expectedEndDate || null }));
     v = l ? { home: side(se.swap ? 'away' : 'home'), away: side(se.swap ? 'home' : 'away'), confirmed: !!l.confirmed } : { none: true };
   }
+  if (SF.blocked) v = { none: true, blocked: true };
   SF.miss[ev.id] = { t: Date.now(), v };
   return v;
 }
@@ -1635,7 +1638,7 @@ async function queueAbsences(token) {
   const list = S.analysis.map((a) => a.ev).filter((e) => e.path?.startsWith('soccer') && e.state === 'pre' && new Date(e.commence_time) - Date.now() < 3 * 864e5)
     .sort((x, y) => new Date(x.commence_time) - new Date(y.commence_time));
   for (const ev of list) {
-    if (token !== S.loadToken) return;
+    if (token !== S.loadToken || SF.blocked) return;
     const c = SF.miss[ev.id]; if (c && Date.now() - c.t < 18e5) continue;
     if (SF.busy[ev.id]) continue;
     SF.busy[ev.id] = true;
@@ -1671,7 +1674,7 @@ function soccerBajasSection(ev, sum) {
       if (last.rc > 0) rows.push(`<div class="inj"><b>${esc(p.displayName)}</b> <span class="chip bad">Roja en su último partido</span><div class="mut tiny">Probable sanción (${new Date(last.date).toLocaleDateString('es-PE', { day: 'numeric', month: 'short' })} vs ${esc(last.opp)}).</div></div>`);
       else if (cs.total >= 4) rows.push(`<div class="inj"><b>${esc(p.displayName)}</b> <span class="chip warn">${cs.total} amarillas</span><div class="mut tiny">Cerca del ciclo de suspensión por acumulación (depende del reglamento de la liga).</div></div>`);
     }
-    const empty = miss === undefined ? 'Buscando bajas…' : miss === null ? 'No se encontró el partido en Sofascore.' : miss.none ? 'Sofascore aún no publica la lista de este partido.' : 'Plantilla completa: sin bajas.';
+    const empty = miss === undefined ? 'Buscando bajas…' : miss === null ? 'No se encontró el partido en Sofascore.' : miss.blocked ? 'La fuente de bajas no está disponible desde esta web.' : miss.none ? 'Sofascore aún no publica la lista de este partido.' : 'Plantilla completa: sin bajas.';
     return `<div><div class="ihead"><b>${esc(abbr)}</b>${miss?.[side]?.length ? `<span class="mut tiny">${miss[side].length} baja${miss[side].length === 1 ? '' : 's'}</span>` : ''}</div>${rows.join('') || `<p class="mut tiny">${empty}</p>`}</div>`;
   };
   return `<div class="card"><div class="ihead"><h4>BAJAS, LESIONES Y SANCIONES</h4></div><div class="icols">${ord(ev, teamBlock('away'), teamBlock('home')).join('')}</div>
