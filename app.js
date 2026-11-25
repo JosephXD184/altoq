@@ -1,5 +1,5 @@
 // ALTOQ · login con Google (Firebase), cuotas en tiempo real (The Odds API) y detector de valor (EV+).
-import { modelFor, pendingReason, summaryFor, logPrediction, settleResults, registryStats } from './model.js?v=9';
+import { modelFor, pendingReason, summaryFor, logPrediction, settleResults, registryStats } from './model.js?v=10';
 const CFG = window.RUSHTOP_CONFIG || {};
 const TZ = 'America/Lima';
 const $ = (s) => document.querySelector(s);
@@ -218,7 +218,7 @@ async function runModels(token) {
           const id = (n) => String(t?.leaders?.find((l) => l.name === n)?.leaders?.[0]?.athlete?.id || '');
           return { pass: id('passingYards'), rush: id('rushingYards'), rec: id('receivingYards') };
         };
-        try { ev.pred = await mdl.predict(M, ev, { injuries, leaders, lines: ev.lines || {} }); } catch { ev.pred = null; }
+        try { ev.pred = await mdl.predict(M, ev, { injuries, leaders, lines: ev.lines || {}, absence: (s) => SF.abs[ev.id]?.[s] }); } catch { ev.pred = null; }
         if (token !== S.loadToken) return;
         if (ev.pred) logPrediction(ev, ev.pred);
       }
@@ -226,6 +226,7 @@ async function runModels(token) {
   }
   S.modelStatus = errs.length ? 'No se pudo calcular el modelo: ' + errs.join(' · ') : null;
   if (token === S.loadToken) render();
+  if (S.liga === 'fc' && token === S.loadToken) queueAbsences(token); // bajas de Sofascore en segundo plano
 }async function fetchOdds() {
   const all = await Promise.all(leagueKeys().map(fetchOddsKey));
   return all.flat().sort((a, b) => new Date(a.commence_time) - new Date(b.commence_time));
@@ -934,6 +935,7 @@ function whyBox(a) {
   steps.push(`<b>Fuerza de cada equipo.</b> Ataque y defensa relativos a la media de la liga, con la temporada actual mezclada con 15 partidos “ficticios” a su nivel de la temporada pasada (cuanto más se juega, más pesa lo actual). ${H} (${rh.gp} PJ): ataque ${rel(rh.att, 'que la media')}, defensa ${rel(rh.def, 'goles que la media')}${rh.promoted ? ' · sin temporada anterior: tratado como ascendido' : ''}. ${A} (${ra.gp} PJ): ataque ${rel(ra.att, 'que la media')}, defensa ${rel(ra.def, 'goles que la media')}${ra.promoted ? ' · sin temporada anterior: tratado como ascendido' : ''}. En defensa, menos de 1 es mejor.`);
   steps.push(`<b>Goles esperados.</b> ${H}: ${n2(w.homeAvg)} (media de goles del local en la liga) × 1,04 × ataque ${n2(rh.att)} × defensa rival ${n2(ra.def)} = <b>${n2(pr.xgHome)}</b>. ${A}: ${n2(w.awayAvg)} × 1,04 × ${n2(ra.att)} × ${n2(rh.def)} = <b>${n2(pr.xgAway)}</b>.`);
   }
+  if (w.abs?.known) steps.push(`<b>Bajas.</b> Lista de Sofascore; cada baja resta según lo titular que es y su parte en los goles del equipo (el reemplazo cubre la mitad). ${H}: ataque ×${n2(w.abs.h.att)}, goles encajados ×${n2(w.abs.h.def)}. ${A}: ataque ×${n2(w.abs.a.att)}, goles encajados ×${n2(w.abs.a.def)}.${[...w.abs.h.notes.map((x) => H + ': ' + x), ...w.abs.a.notes.map((x) => A + ': ' + x)].map((x) => `<br><span class="mut tiny">· ${esc(x)}</span>`).join('')}`);
   steps.push(`<b>De goles a probabilidad.</b> Se juegan 50.000 partidos: los goles de cada equipo salen de una Poisson con una pequeña variación de forma (gamma, ±10 %). ${H} gana el <b>${pct1(pr.pHome)}</b>, empate <b>${pct1(pr.pDraw)}</b>, ${A} <b>${pct1(pr.pAway)}</b>. El empate sube cuando los goles esperados son bajos y parecidos. Tope de favorito: 85 %.${w.live ? ' Partido en juego: solo se simula el tiempo que queda, partiendo del marcador actual.' : ''}`);
   if (pr.mktHome != null) steps.push(`<b>Frente a la casa.</b> Sin margen, la casa da ${H} ${pct1(pr.mktHome)} · X ${pct1(pr.mktDraw)} · ${A} ${pct1(pr.mktAway)}. Mayor diferencia: <b>${num1(pr.maxPP)} pp</b>${pr.maxPP > 10 ? ' (más de 10 pp → “Revisar”: el modelo no ve bajas, alineaciones ni motivación)' : ''}.`);
   return `<div class="card why"><h4>¿POR QUÉ ESTE %?</h4><p class="wsum">${summary}</p>${bars(rows.map((r) => ({ ...r, v: r.v * 100 })), '% más goles')}<ol class="steps">${steps.map((s) => `<li>${s}</li>`).join('')}</ol></div>`;
@@ -1511,33 +1513,170 @@ function soccerPlayersTab(a, side) {
 }
 
 // ----- Fútbol: bajas y sanciones en la pestaña Partido -----
+// ---------- Bajas de fútbol: Sofascore (fuente no oficial; ESPN no las publica) ----------
+const SOFA = 'https://www.sofascore.com/api/v1';
+const SF = { team: store.get('sofaTeams', {}), ev: {}, miss: {}, abs: {}, busy: {} };
+const normN = (s) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function sofaCandidates(name) {
+  const j = await getJ(`${SOFA}/search/teams?q=${encodeURIComponent(name)}`);
+  return (j?.results || []).map((r) => r.entity).filter((e) => e && e.sport?.slug === 'football' && e.gender !== 'F' && !e.national && !/\b(II|B|U\d\d|Youth|Reserves?)\b/i.test(e.name)).slice(0, 3).map((e) => e.id);
+}
+// Partido de Sofascore equivalente: mismo equipo y misma hora (±3 h)
+async function sofaEventFor(ev) {
+  if (SF.ev[ev.id] !== undefined) return SF.ev[ev.id];
+  const ts = new Date(ev.commence_time).getTime() / 1000;
+  for (const [side, name, espnId] of [['home', ev.home_team, ev.home_id], ['away', ev.away_team, ev.away_id]]) {
+    const ids = SF.team[espnId] ? [SF.team[espnId]] : await sofaCandidates(name);
+    for (const id of ids) for (const kind of ev.state === 'pre' ? ['next'] : ['last', 'next']) {
+      const j = await getJ(`${SOFA}/team/${id}/events/${kind}/0`);
+      const e = (j?.events || []).find((x) => Math.abs(x.startTimestamp - ts) < 3 * 3600);
+      if (!e) continue;
+      SF.team[espnId] = id; store.set('sofaTeams', SF.team);
+      const isHome = e.homeTeam?.id === id;
+      return (SF.ev[ev.id] = { id: e.id, swap: side === 'home' ? !isHome : isHome });
+    }
+  }
+  return (SF.ev[ev.id] = null);
+}
+// Lista de bajas del partido (se refresca cada 30 min)
+async function sofaMissing(ev) {
+  const c = SF.miss[ev.id]; if (c && Date.now() - c.t < 18e5) return c.v;
+  const se = await sofaEventFor(ev);
+  let v = null;
+  if (se) {
+    const l = await getJ(`${SOFA}/event/${se.id}/lineups`);
+    const side = (s) => (l?.[s]?.missingPlayers || []).map((m) => ({ name: m.player?.name, pos: m.player?.position, type: m.type, desc: m.description || '', end: m.expectedEndDate || null }));
+    v = l ? { home: side(se.swap ? 'away' : 'home'), away: side(se.swap ? 'home' : 'away'), confirmed: !!l.confirmed } : { none: true };
+  }
+  SF.miss[ev.id] = { t: Date.now(), v };
+  return v;
+}
+// Para pintar: devuelve lo que haya y, si falta, lo pide y recalcula
+function peekMissing(ev) {
+  const c = SF.miss[ev.id];
+  if ((!c || Date.now() - c.t > 18e5) && !SF.busy[ev.id]) { SF.busy[ev.id] = true; loadAbsences(ev).finally(() => { SF.busy[ev.id] = false; softRender(); }); }
+  return c?.v;
+}
+const BODY_ES = { ankle: 'tobillo', knee: 'rodilla', hamstring: 'isquiotibiales', calf: 'gemelo', thigh: 'muslo', hip: 'cadera', foot: 'pie', groin: 'ingle', back: 'espalda', shoulder: 'hombro', muscle: 'muscular', muscular: 'muscular', leg: 'pierna', head: 'cabeza', achilles: 'tendón de Aquiles', 'cruciate ligament': 'ligamento cruzado', ligament: 'ligamento', toe: 'dedo del pie', hand: 'mano', arm: 'brazo', wrist: 'muñeca', rib: 'costilla', abdominal: 'abdominal', adductor: 'aductor', heel: 'talón', meniscus: 'menisco', concussion: 'conmoción', shin: 'tibia', neck: 'cuello', face: 'cara', chest: 'pecho', elbow: 'codo' };
+function descEs(d) {
+  const s = String(d || '').trim(); if (!s) return 'Lesión';
+  if (/red card/i.test(s)) return 'Sanción por roja';
+  if (/yellow/i.test(s)) return 'Sanción por amarillas';
+  if (/suspen/i.test(s)) return 'Sanción';
+  if (/illness|sick/i.test(s)) return 'Enfermedad';
+  if (/knock/i.test(s)) return 'Golpe';
+  if (/strain/i.test(s)) return 'Distensión';
+  if (/unknown|inactive/i.test(s)) return 'Motivo no publicado';
+  const m = s.match(/^(.*?)\s*injury$/i);
+  if (m) { const k = m[1].toLowerCase(); return 'Lesión' + (BODY_ES[k] ? (/^(muscular|abdominal)$/.test(BODY_ES[k]) ? ' ' + BODY_ES[k] : ' de ' + BODY_ES[k]) : m[1] ? ' (' + m[1] + ')' : ''); }
+  return s;
+}
+const isSusp = (x) => /card|suspen/i.test(x.desc);
+// Jugador de ESPN con el mismo nombre (completo, o apellido + inicial)
+function espnMatch(ath, name) {
+  const n = normN(name), parts = n.split(' '), last = parts[parts.length - 1], ini = parts[0]?.[0];
+  return ath.find((p) => normN(p.displayName) === n || normN(p.fullName) === n)
+    || ath.find((p) => { const q = normN(p.displayName).split(' '); return q[q.length - 1] === last && q[0]?.[0] === ini; })
+    || (parts.length === 1 ? ath.find((p) => normN(p.displayName).split(' ').includes(last)) : null);
+}
+// Cuánto pesa cada baja: según lo titular que es y su aporte de goles/asistencias en la temporada (ESPN)
+function absenceFor(ev, side, list) {
+  const teamId = side === 'home' ? ev.home_id : ev.away_id;
+  const roster = peek('roster', teamId); if (roster === undefined) return undefined;
+  const ath = roster?.athletes || [];
+  let att = 1, def = 1; const notes = [];
+  for (const x of list) {
+    const w = x.type === 'doubtful' ? 0.5 : 1;
+    const p = espnMatch(ath, x.name);
+    const tag = `${x.name} (${x.type === 'doubtful' ? 'duda' : isSusp(x) ? 'sancionado' : 'lesionado'})`;
+    if (!p) { notes.push(`${tag}: sin datos de temporada, no ajusta`); continue; }
+    const g = playerGames(ev.path, p.id); if (g === undefined) return undefined;
+    // partidos del equipo = su récord (G-E-P) en esta competición; el gamelog solo trae los que jugó él
+    const rec = String((side === 'home' ? ev.home_rec : ev.away_rec)?.total || '').split('-').reduce((s, n) => s + (+n || 0), 0);
+    const gp = (g || []).filter((y) => y.played).length, tg = Math.max(rec, g?.length || 0);
+    const reg = tg ? gp / tg : 0;
+    if (reg < 0.35) { notes.push(`${tag}: jugaba poco (${gp}/${tg}), no ajusta`); continue; }
+    const goals = (g || []).reduce((s, y) => s + (y.goals || 0), 0), assists = (g || []).reduce((s, y) => s + (y.assists || 0), 0);
+    const inv = Math.min(0.5, (goals + 0.6 * assists) / Math.max(1, tg * 1.5)); // parte de los goles del equipo en la que participa
+    const dAtt = w * 0.5 * inv; // el reemplazo cubre la mitad
+    const pos = x.pos || p.position?.abbreviation?.[0];
+    const dDef = w * reg * (pos === 'G' ? 0.06 : pos === 'D' ? 0.03 : pos === 'M' ? 0.015 : 0);
+    att *= 1 - dAtt; def *= 1 + dDef;
+    const parts = [dAtt >= 0.005 ? `−${Math.round(dAtt * 100)} % ataque` : '', dDef >= 0.005 ? `+${Math.round(dDef * 100)} % goles encajados` : ''].filter(Boolean);
+    notes.push(`${tag}, ${gp}/${tg} PJ, ${goals} G ${assists} A${parts.length ? ' → ' + parts.join(', ') : ''}`);
+  }
+  return { att: Math.max(0.75, att), def: Math.min(1.15, def), notes: notes.length ? notes : ['sin bajas'] };
+}
+// Baja todo lo necesario (Sofascore + plantilla y temporada de cada baja en ESPN) y recalcula el modelo
+async function loadAbsences(ev) {
+  const miss = await sofaMissing(ev);
+  if (!miss || miss.none) return;
+  for (const side of ['home', 'away']) {
+    const teamId = side === 'home' ? ev.home_id : ev.away_id;
+    const roster = await cached('roster', teamId, `${espnBase(ev.path)}/teams/${teamId}/roster`);
+    for (const x of miss[side]) { const p = espnMatch(roster?.athletes || [], x.name); if (p) await cached('glog', p.id, glogUrl(ev.path, p.id)); }
+  }
+  const h = absenceFor(ev, 'home', miss.home), a = absenceFor(ev, 'away', miss.away);
+  if (!h || !a) return;
+  const key = JSON.stringify([h, a]);
+  if (SF.abs[ev.id]?.key === key) return;
+  SF.abs[ev.id] = { home: h, away: a, key };
+  const cur = S.events.find((x) => x.id === ev.id) || ev;
+  const mdl = modelFor(cur.path); if (!mdl) return;
+  try {
+    const M = await mdl.fit();
+    const p = await mdl.predict(M, cur, { injuries: () => [], leaders: () => ({}), lines: cur.lines || {}, absence: (s) => SF.abs[cur.id]?.[s] });
+    if (p) { cur.pred = p; logPrediction(cur, p); }
+  } catch {}
+}
+// En segundo plano: bajas de los partidos de los próximos 3 días, de uno en uno para no saturar
+async function queueAbsences(token) {
+  const list = S.analysis.map((a) => a.ev).filter((e) => e.path?.startsWith('soccer') && e.state === 'pre' && new Date(e.commence_time) - Date.now() < 3 * 864e5)
+    .sort((x, y) => new Date(x.commence_time) - new Date(y.commence_time));
+  for (const ev of list) {
+    if (token !== S.loadToken) return;
+    const c = SF.miss[ev.id]; if (c && Date.now() - c.t < 18e5) continue;
+    if (SF.busy[ev.id]) continue;
+    SF.busy[ev.id] = true;
+    try { await loadAbsences(ev); } catch {} finally { SF.busy[ev.id] = false; }
+    softRender();
+    await sleep(600);
+  }
+}
+let srTimer = null;
+const softRender = () => { if (document.activeElement?.matches?.('input, select')) return; clearTimeout(srTimer); srTimer = setTimeout(render, 400); };
+
 function soccerBajasSection(ev, sum) {
+  const miss = peekMissing(ev);
   const teamBlock = (side) => {
     const teamId = side === 'home' ? ev.home_id : ev.away_id, abbr = side === 'home' ? ev.home_abbr : ev.away_abbr;
     const roster = need('roster', teamId, `${espnBase(ev.path)}/teams/${teamId}/roster`);
-    if (!roster) return `<div><div class="ihead"><b>${esc(abbr)}</b></div><p class="mut tiny">${roster === null ? 'Plantilla no disponible.' : 'Cargando…'}</p></div>`;
-    const ath = roster.athletes || [];
+    const ath = roster?.athletes || [];
     ath.forEach((p) => need('glog', p.id, glogUrl(ev.path, p.id)));
-    const rows = [];
+    const rows = [], listed = new Set();
+    const ab = SF.abs[ev.id]?.[side];
+    for (const x of miss?.[side] || []) {
+      listed.add(normN(x.name));
+      const ret = x.end ? new Date(x.end) : null, days = ret ? Math.max(0, Math.round((ret - new Date()) / 864e5)) : null;
+      const chip = x.type === 'doubtful' ? '<span class="chip warn">Duda</span>' : isSusp(x) ? '<span class="chip bad">Sancionado</span>' : '<span class="chip bad">Lesionado</span>';
+      const note = ab?.notes.find((n) => n.startsWith(x.name + ' ('));
+      rows.push(`<div class="inj"><b>${esc(x.name)}</b> ${chip}<div class="mut tiny">${esc(descEs(x.desc))}${ret ? ` · regreso aprox. ${ret.toLocaleDateString('es-PE', { day: 'numeric', month: 'short' })} (${days} días)` : ''}${note && note.includes('→') ? ` · <span class="acc">${esc(note.split('→')[1].trim())}</span>` : ''}</div></div>`);
+    }
+    // Sanciones probables a partir del historial de tarjetas (si Sofascore no las lista)
     for (const p of ath) {
-      // Lesiones (si ESPN las publica para esta liga)
-      for (const inj of p.injuries || []) {
-        const d = inj.details || {}, ret = d.returnDate ? new Date(d.returnDate) : null;
-        const days = ret ? Math.max(0, Math.round((ret - new Date()) / 864e5)) : null;
-        rows.push(`<div class="inj"><b>${esc(p.displayName)}</b> <span class="chip bad">${esc(INJ_ES[inj.status] || inj.status || 'Baja')}</span><div class="mut tiny">${esc([d.type, d.location].filter(Boolean).join(' · ') || 'Lesión')}${ret ? ` · regreso aprox. ${ret.toLocaleDateString('es-PE', { day: 'numeric', month: 'short' })} (${days} días)` : ''}</div></div>`);
-      }
-      // Sanciones probables a partir de su historial de tarjetas
+      if (listed.has(normN(p.displayName))) continue;
       const g = playerGames(ev.path, p.id); if (!g || !g.length) continue;
       const last = g[g.length - 1], cs = cardStreak(g);
       if (last.rc > 0) rows.push(`<div class="inj"><b>${esc(p.displayName)}</b> <span class="chip bad">Roja en su último partido</span><div class="mut tiny">Probable sanción (${new Date(last.date).toLocaleDateString('es-PE', { day: 'numeric', month: 'short' })} vs ${esc(last.opp)}).</div></div>`);
       else if (cs.total >= 4) rows.push(`<div class="inj"><b>${esc(p.displayName)}</b> <span class="chip warn">${cs.total} amarillas</span><div class="mut tiny">Cerca del ciclo de suspensión por acumulación (depende del reglamento de la liga).</div></div>`);
     }
-    return `<div><div class="ihead"><b>${esc(abbr)}</b></div>${rows.join('') || '<p class="mut tiny">Sin bajas ni sancionados detectados.</p>'}</div>`;
+    const empty = miss === undefined ? 'Buscando bajas…' : miss === null ? 'No se encontró el partido en Sofascore.' : miss.none ? 'Sofascore aún no publica la lista de este partido.' : 'Plantilla completa: sin bajas.';
+    return `<div><div class="ihead"><b>${esc(abbr)}</b>${miss?.[side]?.length ? `<span class="mut tiny">${miss[side].length} baja${miss[side].length === 1 ? '' : 's'}</span>` : ''}</div>${rows.join('') || `<p class="mut tiny">${empty}</p>`}</div>`;
   };
   return `<div class="card"><div class="ihead"><h4>BAJAS, LESIONES Y SANCIONES</h4></div><div class="icols">${ord(ev, teamBlock('away'), teamBlock('home')).join('')}</div>
-    <p class="mut tiny">Las sanciones salen del historial de tarjetas de cada jugador. ESPN no publica lesiones de fútbol con fecha de regreso; cuando las publique para esta liga aparecerán aquí automáticamente.</p></div>`;
+    <p class="mut tiny">Bajas de Sofascore (fuente no oficial), actualizadas cada 30 min${miss?.confirmed ? ' · alineaciones confirmadas' : ''}. El modelo resta a cada equipo según lo titular que es el jugador y sus goles y asistencias. Las sanciones por tarjetas también salen del historial de cada jugador.</p></div>`;
 }
-
 // ----- Boleto: seguimiento en vivo de apuestas de jugador -----
 // Estado del partido y la estadística actual del jugador desde el resumen en vivo de ESPN
 function liveStat(it) {

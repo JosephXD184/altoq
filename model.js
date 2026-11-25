@@ -348,12 +348,13 @@ async function predictCup(M, ev, ctx) {
   const sh = (x) => Math.pow(x, CUP_SHRINK);
   const rh = { att: sh(h.r.att) * h.S, def: sh(h.r.def) / h.S, gp: h.r.gp, promoted: h.r.promoted };
   const ra = { att: sh(a.r.att) * a.S, def: sh(a.r.def) / a.S, gp: a.r.gp, promoted: a.r.promoted };
-  const lh = media * hf * rh.att * ra.def, la = media * af * ra.att * rh.def;
+  const ab = absences(ctx);
+  const lh = media * hf * rh.att * ra.def * ab.h.att * ab.a.def, la = media * af * ra.att * rh.def * ab.a.att * ab.h.def;
   const live = ev.state === 'in' ? { minute: parseInt(ev.clock) || null, sh: +ev.score?.[1] || 0, sa: +ev.score?.[0] || 0 } : null;
   const s = simSoccer(lh, la, live?.minute ?? null, live?.sh, live?.sa);
-  const why = { kind: 'soccer', cup: { h: { ...h, raw: h.r }, a: { ...a, raw: a.r }, media, hf, af }, homeAvg: media * hf, awayAvg: media * af, media, rh, ra, live };
+  const why = { kind: 'soccer', cup: { h: { ...h, raw: h.r }, a: { ...a, raw: a.r }, media, hf, af }, homeAvg: media * hf, awayAvg: media * af, media, rh, ra, live, abs: ab };
   const src = (x, ab) => (x.self ? `${ab}: ESPN no tiene su liga → rating con sus partidos en la copa` : `${ab} viene de ${x.slug.toUpperCase()} (fuerza ${x.S.toFixed(2)})`);
-  return soccerFinish(ev, ctx, s, lh, la, why, [`Copa: ${src(h, ev.home_abbr)} · ${src(a, ev.away_abbr)}`, 'Bajas: N/D'], 0);
+  return soccerFinish(ev, ctx, s, lh, la, why, [`Copa: ${src(h, ev.home_abbr)} · ${src(a, ev.away_abbr)}`, ...ab.notes(ev)], 0);
 }
 async function fitSoccer(path) {
   const teams = await leagueTeams(path);
@@ -403,12 +404,21 @@ function simSoccer(lh, la, minute, scoreH, scoreA) {
 async function predictSoccer(M, ev, ctx) {
   const rh = M.R[ev.home_id], ra = M.R[ev.away_id]; if (!rh || !ra) return null;
   // goles medios del local/visitante en la liga × 1,04 × ataque propio × defensa rival
-  const lhAdj = M.homeAvg * 1.04 * rh.att * ra.def;
-  const la = M.awayAvg * 1.04 * ra.att * rh.def;
+  const ab = absences(ctx);
+  const lhAdj = M.homeAvg * 1.04 * rh.att * ra.def * ab.h.att * ab.a.def;
+  const la = M.awayAvg * 1.04 * ra.att * rh.def * ab.a.att * ab.h.def;
   const live = ev.state === 'in' ? { minute: parseInt(ev.clock) || null, sh: +ev.score?.[1] || 0, sa: +ev.score?.[0] || 0 } : null;
   const s = simSoccer(lhAdj, la, live?.minute ?? null, live?.sh, live?.sa);
-  const why = { kind: 'soccer', homeAvg: M.homeAvg, awayAvg: M.awayAvg, media: M.media, rh, ra, live };
-  return soccerFinish(ev, ctx, s, lhAdj, la, why, ['Bajas: N/D (ESPN no publica bajas confirmadas de fútbol de forma fiable)'], M.nGames);
+  const why = { kind: 'soccer', homeAvg: M.homeAvg, awayAvg: M.awayAvg, media: M.media, rh, ra, live, abs: ab };
+  return soccerFinish(ev, ctx, s, lhAdj, la, why, ab.notes(ev), M.nGames);
+}
+// Bajas (Sofascore, calculadas en app.js): multiplicadores de ataque propio y de goles encajados
+function absences(ctx) {
+  const one = (s) => ctx.absence?.(s) || null;
+  const h = one('home'), a = one('away');
+  const def = { att: 1, def: 1, notes: [] };
+  return { h: h || def, a: a || def, known: !!(h && a),
+    notes: (ev) => (h && a ? [...h.notes.map((x) => ev.home_abbr + ': ' + x), ...a.notes.map((x) => ev.away_abbr + ': ' + x)] : ['Bajas: cargando o no disponibles (se ajusta al abrir el partido)']) };
 }
 function soccerFinish(ev, ctx, s, lhAdj, la, why, notes, nGames) {
   const { rh, ra, live } = why;
