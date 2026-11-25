@@ -17,6 +17,9 @@ window.RUSHTOP_CONFIG = {
   // 2) The Odds API (cuotas en tiempo real) → https://the-odds-api.com  (plan gratis: 500 peticiones/mes)
   oddsApiKey: "",
 
+  // Bajas de fútbol: archivos que descarga cada 2 h la tarea de GitHub (API-Football). Vacío = Sofascore, solo en local.
+  bajasData: "https://raw.githubusercontent.com/JosephXD184/altoq/data/bajas",
+
   // Regiones de casas de apuestas: us, us2, uk, eu, au (cada región cuenta como una petición extra)
   regions: "eu,us",
 

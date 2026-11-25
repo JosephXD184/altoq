@@ -1,5 +1,5 @@
 // ALTOQ · login con Google (Firebase), cuotas en tiempo real (The Odds API) y detector de valor (EV+).
-import { modelFor, pendingReason, summaryFor, logPrediction, settleResults, registryStats } from './model.js?v=11';
+import { modelFor, pendingReason, summaryFor, logPrediction, settleResults, registryStats } from './model.js?v=12';
 const CFG = window.RUSHTOP_CONFIG || {};
 const TZ = 'America/Lima';
 const $ = (s) => document.querySelector(s);
@@ -1555,6 +1555,55 @@ async function sofaMissing(ev) {
   SF.miss[ev.id] = { t: Date.now(), v };
   return v;
 }
+// ---------- Bajas por API-Football (oficial), a través del intermediario de ALTOQ (CFG.bajasData) ----------
+const AF = { day: {} };
+const STOPW = new Set(['fc', 'cf', 'sc', 'ac', 'afc', 'club', 'de', 'del', 'la', 'the', 'cd', 'ca', 'sd', 'ud', 'rc', 'fk', 'sk', 'ss', 'as', 'us', 'calcio', 'football', 'futbol']);
+const toks = (s) => normN(s).split(' ').filter((t) => t && !STOPW.has(t));
+function nameSim(a, b) {
+  const A = toks(a), B = toks(b); if (!A.length || !B.length) return 0;
+  if (A.join(' ') === B.join(' ')) return 1;
+  const hit = A.filter((x) => B.some((y) => x === y || (x.length >= 4 && y.length >= 4 && (x.startsWith(y.slice(0, 4)) || y.startsWith(x.slice(0, 4)))))).length;
+  return hit / Math.min(A.length, B.length);
+}
+async function afDay(date) {
+  const c = AF.day[date]; if (c && Date.now() - c.t < 12e5) return c.v;
+  let v;
+  try {
+    // archivo por día que escribe la tarea de GitHub (.github/workflows/bajas.yml) en la rama "data"
+    const r = await fetch(`${CFG.bajasData.replace(/\/$/, '')}/${date}.json?_=${Math.floor(Date.now() / 6e5)}`);
+    v = r.status === 404 ? { error: 'nofile' } : await r.json();
+  } catch { v = { error: 'red' }; }
+  AF.day[date] = { t: Date.now(), v };
+  return v;
+}
+async function afMissing(ev) {
+  const d = await afDay(new Date(ev.commence_time).toISOString().slice(0, 10));
+  if (d?.error === 'nofile') return { none: true, msg: 'Las bajas de este día aún no se han descargado.' };
+  if (d?.error) return d.error === 'budget' ? { none: true, msg: 'Se alcanzó el límite diario de consultas de bajas; vuelve más tarde.' }
+    : { none: true, blocked: true, msg: /plan|season/i.test(d.error) ? 'El plan gratis de API-Football no da acceso a esta temporada.' : '' };
+  const ts = new Date(ev.commence_time).getTime() / 1000;
+  let best = null;
+  for (const f of d.fixtures || []) {
+    if (Math.abs(f.ts - ts) > 3 * 3600) continue;
+    for (const swap of [false, true]) {
+      const s = nameSim(ev.home_team, swap ? f.away : f.home) + nameSim(ev.away_team, swap ? f.home : f.away);
+      if (s >= 0.9 && (!best || s > best.s)) best = { f, swap, s };
+    }
+  }
+  if (!best) return null;
+  const { f, swap } = best;
+  const pick = (tid) => (d.items || []).filter((x) => x.fx === f.id && x.tid === tid)
+    .map((x) => ({ name: x.name, pos: null, type: /question|doubt/i.test(x.type) ? 'doubtful' : 'missing', desc: x.reason || '', end: null }));
+  return { home: pick(swap ? f.aid : f.hid), away: pick(swap ? f.hid : f.aid), confirmed: false, src: 'API-Football' };
+}
+// Fuente de bajas: API-Football si está configurado; si no, Sofascore (solo funciona en local)
+async function absMissing(ev) {
+  if (!CFG.bajasData) return sofaMissing(ev);
+  const c = SF.miss[ev.id]; if (c && Date.now() - c.t < 18e5) return c.v;
+  const v = await afMissing(ev);
+  SF.miss[ev.id] = { t: Date.now(), v };
+  return v;
+}
 // Para pintar: devuelve lo que haya y, si falta, lo pide y recalcula
 function peekMissing(ev) {
   const c = SF.miss[ev.id];
@@ -1613,7 +1662,7 @@ function absenceFor(ev, side, list) {
 }
 // Baja todo lo necesario (Sofascore + plantilla y temporada de cada baja en ESPN) y recalcula el modelo
 async function loadAbsences(ev) {
-  const miss = await sofaMissing(ev);
+  const miss = await absMissing(ev);
   if (!miss || miss.none) return;
   for (const side of ['home', 'away']) {
     const teamId = side === 'home' ? ev.home_id : ev.away_id;
@@ -1674,11 +1723,12 @@ function soccerBajasSection(ev, sum) {
       if (last.rc > 0) rows.push(`<div class="inj"><b>${esc(p.displayName)}</b> <span class="chip bad">Roja en su último partido</span><div class="mut tiny">Probable sanción (${new Date(last.date).toLocaleDateString('es-PE', { day: 'numeric', month: 'short' })} vs ${esc(last.opp)}).</div></div>`);
       else if (cs.total >= 4) rows.push(`<div class="inj"><b>${esc(p.displayName)}</b> <span class="chip warn">${cs.total} amarillas</span><div class="mut tiny">Cerca del ciclo de suspensión por acumulación (depende del reglamento de la liga).</div></div>`);
     }
-    const empty = miss === undefined ? 'Buscando bajas…' : miss === null ? 'No se encontró el partido en Sofascore.' : miss.blocked ? 'La fuente de bajas no está disponible desde esta web.' : miss.none ? 'Sofascore aún no publica la lista de este partido.' : 'Plantilla completa: sin bajas.';
+    const src = CFG.bajasData ? 'API-Football' : 'Sofascore';
+    const empty = miss === undefined ? 'Buscando bajas…' : miss === null ? `No se encontró el partido en ${src}.` : miss.msg ? miss.msg : miss.blocked ? 'La fuente de bajas no está disponible desde esta web.' : miss.none ? `${src} aún no publica la lista de este partido.` : miss.src ? 'Sin bajas reportadas.' : 'Plantilla completa: sin bajas.';
     return `<div><div class="ihead"><b>${esc(abbr)}</b>${miss?.[side]?.length ? `<span class="mut tiny">${miss[side].length} baja${miss[side].length === 1 ? '' : 's'}</span>` : ''}</div>${rows.join('') || `<p class="mut tiny">${empty}</p>`}</div>`;
   };
   return `<div class="card"><div class="ihead"><h4>BAJAS, LESIONES Y SANCIONES</h4></div><div class="icols">${ord(ev, teamBlock('away'), teamBlock('home')).join('')}</div>
-    <p class="mut tiny">Bajas de Sofascore (fuente no oficial), actualizadas cada 30 min${miss?.confirmed ? ' · alineaciones confirmadas' : ''}. El modelo resta a cada equipo según lo titular que es el jugador y sus goles y asistencias. Las sanciones por tarjetas también salen del historial de cada jugador.</p></div>`;
+    <p class="mut tiny">Bajas de ${CFG.bajasData ? 'API-Football' : 'Sofascore (fuente no oficial)'}, actualizadas cada 30 min${miss?.confirmed ? ' · alineaciones confirmadas' : ''}. El modelo resta a cada equipo según lo titular que es el jugador y sus goles y asistencias. Las sanciones por tarjetas también salen del historial de cada jugador.</p></div>`;
 }
 // ----- Boleto: seguimiento en vivo de apuestas de jugador -----
 // Estado del partido y la estadística actual del jugador desde el resumen en vivo de ESPN
