@@ -1,5 +1,5 @@
 // ALTOQ · login con Google (Firebase), cuotas en tiempo real (The Odds API) y detector de valor (EV+).
-import { modelFor, pendingReason, summaryFor, logPrediction, settleResults, registryStats } from './model.js?v=8';
+import { modelFor, pendingReason, summaryFor, logPrediction, settleResults, registryStats } from './model.js?v=9';
 const CFG = window.RUSHTOP_CONFIG || {};
 const TZ = 'America/Lima';
 const $ = (s) => document.querySelector(s);
@@ -240,9 +240,38 @@ async function fetchOddsKey(key) {
   return data.sort((a, b) => new Date(a.commence_time) - new Date(b.commence_time));
 }
 function schedule() {
-  clearInterval(S.timer);
-  if (S.live) S.timer = setInterval(load, Math.max(30, CFG.refreshSeconds || 120) * 1000);
+  clearInterval(S.timer); clearInterval(S.fastTimer);
+  if (!S.live) return;
+  // Recarga completa (partidos de la semana y modelo) cada 2 min; sin pestaña visible no se pide nada
+  S.timer = setInterval(() => { if (!document.hidden) load(); }, Math.max(30, CFG.refreshSeconds || 120) * 1000);
+  // Directo: cada 10 s solo el marcador de las ligas que tienen partidos en juego
+  S.fastTimer = setInterval(() => { if (!document.hidden) fastLive(); }, LIVE_MS);
 }
+const LIVE_MS = 10000;
+const bust = (u) => u + (u.includes('?') ? '&' : '?') + '_=' + Date.now(); // evita respuestas guardadas por el navegador
+// Partidos que están (o deberían estar) en juego ahora
+const liveNow = () => S.events.filter((e) => e.path && (e.state === 'in' || (e.state === 'pre' && new Date(e.commence_time) <= new Date())));
+async function fastLive() {
+  if (S.fastBusy) return;
+  const live = liveNow(); if (!live.length) return;
+  S.fastBusy = true;
+  try {
+    const paths = [...new Set(live.map((e) => e.path))];
+    const dates = [...new Set([limaDay(Date.now()), nightKey(Date.now())])].map((d) => d.replace(/-/g, ''));
+    const pages = await Promise.all(paths.flatMap((p) => dates.map((d) => getJ(bust(`https://site.api.espn.com/apis/site/v2/sports/${p}/scoreboard?dates=${d}`)))));
+    let changed = false;
+    for (const pg of pages) for (const e of pg?.events || []) {
+      const ev = S.events.find((x) => x.id === e.id); if (!ev) continue;
+      const c = e.competitions?.[0], home = c?.competitors?.find((x) => x.homeAway === 'home'), away = c?.competitors?.find((x) => x.homeAway === 'away');
+      const st = e.status?.type?.state, score = st === 'pre' ? null : [away?.score, home?.score];
+      if (st !== ev.state || e.status?.displayClock !== ev.clock || JSON.stringify(score) !== JSON.stringify(ev.score)) {
+        Object.assign(ev, { state: st, detail: e.status?.type?.shortDetail, clock: e.status?.displayClock, score }); changed = true;
+      }
+    }
+    if (changed && !document.activeElement?.matches?.('input, select')) render();
+  } finally { S.fastBusy = false; }
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden && S.user) fastLive(); });
 
 // ---------- Análisis de valor ----------
 // Para cada mercado/línea: quitamos el margen de cada casa (normalizando 1/cuota), promediamos
@@ -717,7 +746,7 @@ const rerenderDetail = () => {
   clearTimeout(rrTimer); rrTimer = setTimeout(render, 350);
 };
 // En el boleto, refresca el seguimiento en vivo cada 30 s
-setInterval(() => { if (S.user && !S.detail && S.tab === 'boleto' && (getBets().length || getSlip().some((x) => x.pid)) && !document.activeElement?.matches?.('input')) render(); }, 30000);
+setInterval(() => { if (S.user && (S.detail ? liveNow().some((e) => String(e.id) === String(S.detail.id)) : (S.tab === 'boleto' || S.tab === 'perfil') && (getBets().length || getSlip().some((x) => x.pid))) && !document.activeElement?.matches?.('input') && !document.hidden) render(); }, LIVE_MS);
 function need(bucket, key, url) { if (peek(bucket, key) === undefined && !(D[bucket][key]?.v instanceof Promise)) cached(bucket, key, url).then(rerenderDetail); return peek(bucket, key); }
 
 const isNBA = (ev) => ev.path === 'basketball/nba';
@@ -1998,7 +2027,17 @@ function statsTab(a) {
 }
 
 // ---------- Directo de la apuesta: marcador por periodos y gráfica de la estadística vs lo esperado ----------
-const liveSum = (it) => need('live', it.eventId + '|' + Math.floor(Date.now() / 30000), `${espnBase(it.path)}/summary?event=${it.eventId}`);
+// Resumen en vivo: se vuelve a pedir cada 10 s, pero mientras llega se sigue mostrando el último (sin parpadeo)
+function liveSum(it) {
+  const k = String(it.eventId), c = D.live[k];
+  const done = c?.v?.header?.competitions?.[0]?.status?.type?.state === 'post';
+  if (!c || (!c.busy && Date.now() - c.t > (done ? 6e5 : LIVE_MS))) {
+    const prev = c?.v;
+    D.live[k] = { t: c?.t || 0, v: prev, busy: true };
+    getJ(bust(`${espnBase(it.path)}/summary?event=${it.eventId}`)).then((v) => { D.live[k] = { t: Date.now(), v: v ?? prev }; rerenderDetail(); });
+  }
+  return D.live[k].v;
+}
 const ZERO = { points: 0, reb: 0, ast: 0, tpm: 0, tpa: 0, fgm: 0, fga: 0, ftm: 0, fta: 0, stl: 0, blk: 0, to: 0, sh: 0, sot: 0, sv: 0, yc: 0, goals: 0, assists: 0, fouls: 0, fs: 0, off: 0 };
 const nbaT = (period, clock) => {
   const s = String(clock || '0'); const left = s.includes(':') ? +s.split(':')[0] + (+s.split(':')[1] || 0) / 60 : (parseFloat(s) || 0) / 60;
