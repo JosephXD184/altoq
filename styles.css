@@ -470,8 +470,9 @@ i.lglogo{border-radius:50%;background:var(--surf2)}
 .lt{display:contents}
 .lt>*{grid-row:var(--r)}
 .lt>img,.lt>.nologo{grid-column:1}.lt>.ln{grid-column:2}.lt>.lp{grid-column:4;text-align:right}.lt>.ls{grid-column:5}
-.ld{grid-column:3;grid-row:1/3;align-self:center;display:flex;align-items:center;gap:5px;padding:3px 8px;border-radius:99px;background:var(--surf2);font-size:11px;font-weight:700;color:var(--mut)}
-.ld i{font-style:normal;font-weight:800}
+.lps{grid-column:4;grid-row:1/3;align-self:stretch;display:flex;flex-direction:column;justify-content:space-between;align-items:flex-end;font-size:11px;font-weight:700;color:var(--mut);line-height:1.2;min-width:44px}
+.lpx{color:var(--ink);background:var(--surf2);border-radius:99px;padding:0 6px}
+.lpx i{font-style:normal;font-weight:800;color:var(--acc)}
 .lt img,.lt .nologo{width:20px;height:20px;object-fit:contain;border-radius:50%}
 .lt .nologo{background:var(--surf2)}
 .ln{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}

@@ -1,5 +1,5 @@
 // ALTOQ · login con Google (Firebase), cuotas en tiempo real (The Odds API) y detector de valor (EV+).
-import { modelFor, pendingReason, summaryFor, logPrediction, settleResults, registryStats } from './model.js?v=18';
+import { modelFor, pendingReason, summaryFor, logPrediction, settleResults, registryStats } from './model.js?v=19';
 const CFG = window.RUSHTOP_CONFIG || {};
 const TZ = 'America/Lima';
 const $ = (s) => document.querySelector(s);
@@ -484,9 +484,11 @@ function lvRow(a, favs, opt = {}) {
   const sc = (s) => (st === 'pre' ? '' : esc(ev.score?.[s === 'home' ? 1 : 0] ?? ''));
   const hs = +ev.score?.[1], as = +ev.score?.[0];
   const won = st === 'post' && ev.score ? (hs > as ? 'home' : as > hs ? 'away' : '') : '';
-  // Rejilla de 2 filas: escudo · nombre · empate (ocupa las dos filas, al medio) · % del equipo · marcador
-  const team = (s, i) => `<div class="lt ${won && won !== s ? 'lose' : ''} ${won === s ? 'win' : ''}" style="--r:${i + 1}">${logoImg(teamLogo(ev, s))}<span class="ln">${esc(teamName(ev, s))}</span><span class="lp">${st !== 'post' && p?.[s] != null ? pctEs(p[s]) : ''}</span><b class="ls">${sc(s)}</b></div>`;
-  const draw = st !== 'post' && p?.draw != null ? `<span class="ld"><i>X</i>${pctEs(p.draw)}</span>` : '';
+  // Rejilla de 2 filas: escudo · nombre · probabilidades · marcador. Las probabilidades van en una sola columna
+  // que ocupa las dos filas, en el mismo orden que los equipos: arriba el de arriba, X (empate) al medio, abajo el de abajo
+  const team = (s, i) => `<div class="lt ${won && won !== s ? 'lose' : ''} ${won === s ? 'win' : ''}" style="--r:${i + 1}">${logoImg(teamLogo(ev, s))}<span class="ln">${esc(teamName(ev, s))}</span><b class="ls">${sc(s)}</b></div>`;
+  const [t1, t2] = ord(ev, 'away', 'home'), pv = (s) => (p?.[s] != null ? pctEs(p[s]) : '–');
+  const draw = st !== 'post' && p ? `<span class="lps"><span>${pv(t1)}</span>${p.draw != null ? `<span class="lpx"><i>X</i> ${pv('draw')}</span>` : ''}<span>${pv(t2)}</span></span>` : '';
   const oddsDef = homeFirst(ev) ? [['1', L.mlHome], ['X', L.mlDraw], ['2', L.mlAway]] : [[ev.away_abbr, L.mlAway], [ev.home_abbr, L.mlHome]];
   const odds = S.lv.odds && st !== 'post' ? `<div class="lodds">${oddsDef.map(([k, v]) => `<span><i>${esc(k)}</i>${v ? fmtOdd(v) : '–'}</span>`).join('')}</div>` : '';
   const top = [opt.league ? `<span class="ltag2">${esc(LG_META[ev.sport_key]?.[0] || '')}</span>` : '', opt.day ? `<span>${esc(dayLabel(dayOf(ev)))}</span>` : ''].join('');
