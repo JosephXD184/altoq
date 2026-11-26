@@ -324,6 +324,9 @@ const LEAGUE_STR = {
   'pol.1': 0.57, 'isr.1': 0.55, 'cro.1': 0.56, 'srb.1': 0.56, 'ukr.1': 0.56, 'swe.1': 0.55, 'cyp.1': 0.54, 'rus.1': 0.58,
   'hun.1': 0.52, 'rou.1': 0.52, 'bul.1': 0.5, 'slo.1': 0.5, 'svk.1': 0.5, 'aze.1': 0.5, 'kaz.1': 0.48,
   'eng.2': 0.72, 'esp.2': 0.62, 'ita.2': 0.6, 'ger.2': 0.66, 'fra.2': 0.58,
+  // Sudamérica (Libertadores): en un cruce entre dos ligas solo importa la proporción entre ambas
+  'bra.1': 0.72, 'arg.1': 0.66, 'col.1': 0.56, 'uru.1': 0.54, 'ecu.1': 0.55, 'par.1': 0.52, 'chi.1': 0.52,
+  'per.1': 0.47, 'bol.1': 0.45, 'ven.1': 0.43, 'mex.1': 0.64, 'usa.1': 0.6,
 };
 const CUP_STR_DEFAULT = 0.5, CUP_SELF_STR = 0.8; // 0,8 = nivel medio de un equipo de copa frente a la Premier
 const CUP_HOME = 1.12, CUP_AWAY = 0.9, CUP_SHRINK = 0.85; // localía típica en copas europeas
@@ -452,7 +455,7 @@ export function modelFor(path) {
   if (path === 'basketball/nba') return { fit: () => memo('fit' + path, 6e5, () => fitNBA(path)), predict: predictNBA, name: 'NBA v2.5' };
   if (path === 'football/nfl') return { fit: () => memo('fit' + path, 6e5, () => fitNFL(path)), predict: predictNFL, name: 'NFL ridge' };
   if (SOCCER_OK.includes(path)) return { fit: () => memo('fit' + path, 6e5, () => fitSoccer(path)), predict: predictSoccer, name: 'Fútbol v4' };
-  if (/uefa\./.test(path)) return { fit: () => fitCup(path), predict: predictCup, name: 'Fútbol v4 · copas' };
+  if (/uefa\.|conmebol\./.test(path)) return { fit: () => fitCup(path), predict: predictCup, name: 'Fútbol v4 · copas' };
   return null; // Liga 1 Perú, etc.: pendiente → N/D
 }
 export const pendingReason = (path) => (/uefa/.test(path) ? 'Copas europeas: capa del modelo pendiente (necesita los ratings de todas las ligas de origen) → N/D' : /per\.1/.test(path) ? 'Liga 1 Perú: modelo por diferencia de gol pendiente → N/D' : 'Modelo no disponible para esta competición → N/D');

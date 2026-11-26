@@ -5,8 +5,8 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync, unlink
 const API = 'https://v3.football.api-sports.io';
 const KEY = process.env.APIFOOTBALL_KEY;
 const OUT = process.argv[2] || 'out';
-// Ligas de ALTOQ (ids de API-Football): Premier, LaLiga, Serie A, Bundesliga, Ligue 1, Brasileirão, Argentina, Perú, Champions, Europa, Conference
-const LEAGUES = new Set([39, 140, 135, 78, 61, 71, 128, 281, 2, 3, 848]);
+// Ligas de ALTOQ (ids de API-Football): Premier, LaLiga, Serie A, Bundesliga, Ligue 1, Brasileirão, Argentina, Perú, Champions, Europa, Conference, Libertadores
+const LEAGUES = new Set([39, 140, 135, 78, 61, 71, 128, 281, 2, 3, 848, 13]);
 if (!KEY) { console.error('Falta el secreto APIFOOTBALL_KEY'); process.exit(1); }
 mkdirSync(OUT, { recursive: true });
 

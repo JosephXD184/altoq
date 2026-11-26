@@ -1,5 +1,5 @@
 // ALTOQ · login con Google (Firebase), cuotas en tiempo real (The Odds API) y detector de valor (EV+).
-import { modelFor, pendingReason, summaryFor, logPrediction, settleResults, registryStats } from './model.js?v=13';
+import { modelFor, pendingReason, summaryFor, logPrediction, settleResults, registryStats } from './model.js?v=14';
 const CFG = window.RUSHTOP_CONFIG || {};
 const TZ = 'America/Lima';
 const $ = (s) => document.querySelector(s);
@@ -13,7 +13,7 @@ const FC_LEAGUES = {
   soccer_epl: 'Premier League', soccer_spain_la_liga: 'LaLiga', soccer_italy_serie_a: 'Serie A',
   soccer_germany_bundesliga: 'Bundesliga', soccer_france_ligue_one: 'Ligue 1', soccer_brazil_campeonato: 'Brasileirão',
   soccer_argentina_primera_division: 'Liga Argentina', soccer_peru_liga1: 'Liga 1 Perú', soccer_uefa_champs_league: 'Champions League', soccer_uefa_europa_league: 'Europa League',
-  soccer_uefa_europa_conference_league: 'Conference League',
+  soccer_uefa_europa_conference_league: 'Conference League', soccer_conmebol_copa_libertadores: 'Copa Libertadores',
 };
 // Ruta equivalente en ESPN (partidos reales, marcadores y cuotas DraftKings sin API key)
 const ESPN = {
@@ -21,7 +21,7 @@ const ESPN = {
   soccer_epl: 'soccer/eng.1', soccer_spain_la_liga: 'soccer/esp.1', soccer_italy_serie_a: 'soccer/ita.1',
   soccer_germany_bundesliga: 'soccer/ger.1', soccer_france_ligue_one: 'soccer/fra.1', soccer_brazil_campeonato: 'soccer/bra.1',
   soccer_argentina_primera_division: 'soccer/arg.1', soccer_peru_liga1: 'soccer/per.1', soccer_uefa_champs_league: 'soccer/uefa.champions', soccer_uefa_europa_league: 'soccer/uefa.europa',
-  soccer_uefa_europa_conference_league: 'soccer/uefa.europa.conf',
+  soccer_uefa_europa_conference_league: 'soccer/uefa.europa.conf', soccer_conmebol_copa_libertadores: 'soccer/conmebol.libertadores',
 };
 const HAS_FIREBASE = !!(CFG.firebase && CFG.firebase.apiKey);
 const HAS_ODDS = !!CFG.oddsApiKey;
@@ -43,7 +43,7 @@ const S = {
 const sportKey = () => ({ nba: 'basketball_nba', nfl: 'americanfootball_nfl', fc: 'soccer' }[S.liga]);
 // En fútbol se cargan todas las ligas y copas a la vez; las fichas de arriba solo filtran
 const leagueKeys = () => (S.liga === 'fc' ? Object.keys(FC_LEAGUES) : [sportKey()]);
-const FC_SHORT = { soccer_epl: 'Premier', soccer_spain_la_liga: 'LaLiga', soccer_italy_serie_a: 'Serie A', soccer_germany_bundesliga: 'Bundesliga', soccer_france_ligue_one: 'Ligue 1', soccer_brazil_campeonato: 'Brasileirão', soccer_argentina_primera_division: 'Argentina', soccer_peru_liga1: 'Liga 1', soccer_uefa_champs_league: 'Champions', soccer_uefa_europa_league: 'Europa League', soccer_uefa_europa_conference_league: 'Conference' };
+const FC_SHORT = { soccer_epl: 'Premier', soccer_spain_la_liga: 'LaLiga', soccer_italy_serie_a: 'Serie A', soccer_germany_bundesliga: 'Bundesliga', soccer_france_ligue_one: 'Ligue 1', soccer_brazil_campeonato: 'Brasileirão', soccer_argentina_primera_division: 'Argentina', soccer_peru_liga1: 'Liga 1', soccer_uefa_champs_league: 'Champions', soccer_uefa_europa_league: 'Europa League', soccer_uefa_europa_conference_league: 'Conference', soccer_conmebol_copa_libertadores: 'Libertadores' };
 const fcVisible = (a) => S.liga !== 'fc' || S.fc === 'all' || a.ev.sport_key === S.fc;
 
 // ---------- Formato ----------
@@ -206,7 +206,7 @@ async function runModels(token) {
       if (token !== S.loadToken) return;
       if (M.games) settleResults(M.games);
       // Primero el día que estás viendo; se repinta cada pocos partidos para no esperar a toda la semana
-      const order = S.analysis.filter((a) => a.ev.path === path).sort((x, y) => (nightKey(x.ev.commence_time) === S.calDay ? 0 : 1) - (nightKey(y.ev.commence_time) === S.calDay ? 0 : 1));
+      const order = S.analysis.filter((a) => a.ev.path === path).sort((x, y) => (dayOf(x.ev) === S.calDay ? 0 : 1) - (dayOf(y.ev) === S.calDay ? 0 : 1) || (x.ev.state === 'post') - (y.ev.state === 'post'));
       let done = 0;
       for (const a of order) {
         if (++done % 6 === 0) render();
@@ -371,6 +371,7 @@ const inSlip = (a, m, o) => getSlip().some((x) => x.id === a.ev.id + '|' + m.mar
 function render() {
   const v = $('#view');
   $('#status').classList.toggle('hidden', !!S.detail);
+  document.body.classList.toggle('wide', !S.detail && S.tab === 'hoy');
   if (S.detail) { v.innerHTML = viewDetail(); return; }
   renderStatus();
   if (S.error) { v.innerHTML = `<div class="card empty">⚠️ ${esc(S.error)}<br><br><button class="btn ghost sm" data-act="reload">Reintentar</button></div>`; return; }
@@ -430,6 +431,18 @@ function probBar(p, ev) {
   return `<div class="pbar">${seg(L)}${p.draw ? `<i class="draw" style="width:${w(p.draw)}"></i>` : ''}${seg(R)}</div>
     <div class="pfoot"><span>${pctEs(p[L])}</span><span class="mut">${esc(p.src)}${p.draw ? ' · empate ' + pctEs(p.draw) : ''}${extra}</span><span>${pctEs(p[R])}</span></div>`;
 }
+// ---------- Partidos: lista por competición (izquierda) y partido destacado + destacados (derecha) ----------
+const LG_META = {
+  basketball_nba: ['NBA', 'Estados Unidos'], americanfootball_nfl: ['NFL', 'Estados Unidos'],
+  soccer_conmebol_copa_libertadores: ['Copa Libertadores', 'Sudamérica'],
+  soccer_uefa_champs_league: ['Champions League', 'Europa'], soccer_uefa_europa_league: ['Europa League', 'Europa'], soccer_uefa_europa_conference_league: ['Conference League', 'Europa'],
+  soccer_epl: ['Premier League', 'Inglaterra'], soccer_spain_la_liga: ['LaLiga', 'España'], soccer_italy_serie_a: ['Serie A', 'Italia'],
+  soccer_germany_bundesliga: ['Bundesliga', 'Alemania'], soccer_france_ligue_one: ['Ligue 1', 'Francia'],
+  soccer_brazil_campeonato: ['Brasileirão Série A', 'Brasil'], soccer_argentina_primera_division: ['Liga Profesional', 'Argentina'], soccer_peru_liga1: ['Liga 1', 'Perú'],
+};
+const LG_ORDER = Object.keys(LG_META);
+// Peso de cada competición para elegir los destacados
+const LG_WEIGHT = { soccer_conmebol_copa_libertadores: 14, soccer_uefa_champs_league: 9, americanfootball_nfl: 8, soccer_epl: 8, soccer_spain_la_liga: 8, basketball_nba: 7, soccer_italy_serie_a: 7, soccer_germany_bundesliga: 7, soccer_france_ligue_one: 6, soccer_uefa_europa_league: 6, soccer_brazil_campeonato: 6, soccer_argentina_primera_division: 5, soccer_peru_liga1: 5, soccer_uefa_europa_conference_league: 4 };
 // Calendario por "noche": un partido de madrugada (antes de las 6:00 Lima) cuenta en la noche del día anterior
 const nightKey = (t) => limaDay(new Date(t).getTime() - 6 * 36e5);
 const keyDate = (k) => new Date(k + 'T12:00:00-05:00');
@@ -437,70 +450,130 @@ const wd = (k, f) => keyDate(k).toLocaleDateString('es-PE', { weekday: f, timeZo
 const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 const dnum = (k) => +k.slice(8);
 const monthOf = (k) => keyDate(k).toLocaleDateString('es-PE', { month: 'long', timeZone: TZ }).toLowerCase();
-function calDays() {
-  const today = nightKey(Date.now());
-  return Array.from({ length: 7 }, (_, i) => limaDay(keyDate(today).getTime() + i * 864e5));
+// Día de cada partido: en fútbol el día de Lima; en NBA/NFL la noche
+const dayOf = (ev) => (homeFirst(ev) ? limaDay(ev.commence_time) : nightKey(ev.commence_time));
+const todayKey = () => (S.liga === 'fc' ? limaDay(Date.now()) : nightKey(Date.now()));
+const addDays = (k, n) => limaDay(keyDate(k).getTime() + n * 864e5);
+const dayLabel = (k) => { const d = Math.round((keyDate(k) - keyDate(todayKey())) / 864e5); return d === 0 ? 'Hoy' : d === 1 ? 'Mañana' : d === -1 ? 'Ayer' : `${cap(wd(k, 'short'))} ${dnum(k)} ${monthOf(k).slice(0, 3)}`; };
+const DAY_MIN = -1, DAY_MAX = 6;
+const mfavKey = () => 'mfavs:' + (S.user?.uid || 'anon');
+const getMFavs = () => new Set(store.get(mfavKey(), []));
+S.lv = { tab: 'all', filter: '', odds: store.get('lvOdds', false), closed: {}, feat: 0 };
+const logoImg = (src, cls = '') => (src ? `<img class="${cls}" src="${esc(src)}" alt="" loading="lazy">` : `<i class="nologo ${cls}"></i>`);
+const teamName = (ev, s) => (s === 'home' ? ev.home_team : ev.away_team);
+const teamLogo = (ev, s) => (s === 'home' ? ev.home_logo : ev.away_logo);
+const liveClock = (ev) => (homeFirst(ev) ? ev.clock && ev.clock !== "0'" ? ev.clock : ev.detail : ev.detail) || 'En vivo';
+
+function rowStatus(ev) {
+  if (ev.state === 'in') return `<span class="rs live">${esc(liveClock(ev))}</span>`;
+  if (ev.state === 'post') return `<span class="rs">${/^(FT|Final)/i.test(ev.detail || '') || !ev.detail ? 'Final' : esc(ev.detail)}</span>`;
+  return '<span class="rs">–</span>';
 }
-// Fútbol: próximos 7 días de todas nuestras ligas y copas, con fichas para filtrar
-function viewFutbol() {
-  const leagues = Object.keys(FC_LEAGUES).filter((k) => S.analysis.some((a) => a.ev.sport_key === k));
-  if (S.fc !== 'all' && !leagues.includes(S.fc) && S.analysis.length) S.fc = 'all';
-  const chip = (k, lab) => `<button class="lchip ${S.fc === k ? 'on' : ''}" data-fcf="${k}">${esc(lab)}</button>`;
-  const list = S.analysis.filter(fcVisible);
-  const upcoming = list.filter((a) => a.ev.state !== 'post');
-  const first = upcoming.map((a) => a.ev.commence_time).sort()[0];
-  const firstTxt = first ? new Date(first).toLocaleDateString('es-PE', { weekday: 'short', day: 'numeric', month: 'short', timeZone: TZ }).replace(/\./g, '') + ' ' + fmtTime(first) : '–';
-  const nVal = allPicks().length;
-  let html = `<div class="calhead"><span class="calsub">Próximos 7 días</span><h2>Próximos partidos</h2></div>
-    <div class="lchips">${chip('all', 'Todas')}${leagues.map((k) => chip(k, FC_SHORT[k] || FC_LEAGUES[k])).join('')}</div>
-    <div class="calk"><div class="card"><b>${upcoming.length}</b><span>partido${upcoming.length === 1 ? '' : 's'}</span></div>
-    <div class="card"><b>${firstTxt}</b><span>primer partido</span></div>
-    <div class="card"><b class="acc">${S.modelStatus && !S.modelStatus.startsWith('No se') ? '…' : nVal}</b><span>apuestas con valor</span></div></div>`;
-  if (!list.length) return html + `<div class="card empty">${S.updated ? 'No hay partidos en los próximos 7 días.' : 'Cargando partidos…'}</div>`;
-  let lastDay = '';
-  for (const a of list) {
-    const ev = a.ev, day = fmtDay(ev.commence_time);
-    if (day !== lastDay) { html += `${lastDay ? '</div>' : ''}<div class="day">${day}</div><div class="grid">`; lastDay = day; }
-    html += matchCard(a, S.fc === 'all' ? FC_SHORT[ev.sport_key] : '');
-  }
-  return html + '</div>';
+// Fila de partido: hora y estado · equipos con la probabilidad del modelo y el marcador · favorito
+function lvRow(a, favs, opt = {}) {
+  const ev = a.ev, p = probsOf(a), st = ev.state, L = ev.lines || {};
+  const sc = (s) => (st === 'pre' ? '' : esc(ev.score?.[s === 'home' ? 1 : 0] ?? ''));
+  const hs = +ev.score?.[1], as = +ev.score?.[0];
+  const won = st === 'post' && ev.score ? (hs > as ? 'home' : as > hs ? 'away' : '') : '';
+  const team = (s) => `<div class="lt ${won && won !== s ? 'lose' : ''} ${won === s ? 'win' : ''}">${logoImg(teamLogo(ev, s))}<span class="ln">${esc(teamName(ev, s))}</span><span class="lp">${st !== 'post' && p?.[s] != null ? pctEs(p[s]) : ''}</span><b class="ls">${sc(s)}</b></div>`;
+  const oddsDef = homeFirst(ev) ? [['1', L.mlHome], ['X', L.mlDraw], ['2', L.mlAway]] : [[ev.away_abbr, L.mlAway], [ev.home_abbr, L.mlHome]];
+  const odds = S.lv.odds && st !== 'post' ? `<div class="lodds">${oddsDef.map(([k, v]) => `<span><i>${esc(k)}</i>${v ? fmtOdd(v) : '–'}</span>`).join('')}</div>` : '';
+  const top = [opt.league ? `<span class="ltag2">${esc(LG_META[ev.sport_key]?.[0] || '')}</span>` : '', opt.day ? `<span>${esc(dayLabel(dayOf(ev)))}</span>` : ''].join('');
+  return `<div class="lrow ${st}" data-open="${esc(ev.id)}"><div class="lti">${top}<span>${fmtTime(ev.commence_time)}</span>${rowStatus(ev)}</div>
+    <div class="lteams">${ord(ev, 'away', 'home').map(team).join('')}${odds}</div>
+    <button class="lstar ${favs.has(ev.id) ? 'on' : ''}" data-mfav="${esc(ev.id)}" aria-label="Favorito">${favs.has(ev.id) ? '★' : '☆'}</button></div>`;
 }
-function matchCard(a, tag) {
-  const ev = a.ev;
-  return `<div class="card mcard ${ev.state === 'post' ? 'done' : ''}" data-open="${esc(ev.id)}">${tag ? `<span class="ltag">${esc(tag)}</span>` : ''}
-      <div class="mrow">${ord(ev, teamBlock(ev.away_logo, ev.away_abbr || ev.away_team, ev.away_rec), teamBlock(ev.home_logo, ev.home_abbr || ev.home_team, ev.home_rec)).join(centerBlock(ev))}</div>
-      ${probBar(probsOf(a), ev)}
-    </div>`;
+const CHEV = '<svg viewBox="0 0 24 24"><path d="M6 15l6-6 6 6"/></svg>';
+function lvGroup(sk, rows, favs, opt) {
+  const live = rows.filter((a) => a.ev.state === 'in').length, closed = S.lv.closed[sk];
+  const [name, area] = LG_META[sk] || [sk, ''];
+  return `<div class="lgroup"><button class="lghead" data-lgtoggle="${sk}">${logoImg(rows.find((a) => a.ev.league_logo)?.ev.league_logo, 'lglogo')}<div><b>${esc(name)}</b><span class="mut tiny">${esc(area)}</span></div>
+    <span class="lgcount">${live ? `<em>${live}</em>/` : ''}${rows.length}</span><span class="lgchev ${closed ? 'closed' : ''}">${CHEV}</span></button>
+    ${closed ? '' : rows.map((a) => lvRow(a, favs, opt)).join('')}</div>`;
 }
+const groupBy = (list) => { const g = {}; for (const a of list) (g[a.ev.sport_key] ||= []).push(a); return LG_ORDER.filter((k) => g[k]).map((k) => [k, g[k]]); };
+
 function viewHoy() {
-  if (S.liga === 'fc') return viewFutbol();
-  const days = calDays(), today = days[0];
-  const byDay = (k) => S.analysis.filter((a) => nightKey(a.ev.commence_time) === k);
-  if (S.calLiga !== sportKey()) { S.calLiga = sportKey(); S.calDay = null; }
-  if (!days.includes(S.calDay)) S.calDay = days.find((k) => byDay(k).some((a) => a.ev.state !== 'post')) || today;
-  const k = S.calDay, list = byDay(k);
-  const next = limaDay(keyDate(k).getTime() + 864e5);
-  const crosses = list.some((a) => limaDay(a.ev.commence_time) !== k);
-  const title = crosses ? `Noche del ${wd(k, 'long')} ${dnum(k)}${monthOf(k) !== monthOf(next) ? ' de ' + monthOf(k) : ''} al ${wd(next, 'long')} ${dnum(next)} de ${monthOf(next)}`
-    : `${cap(wd(k, 'long'))} ${dnum(k)} de ${monthOf(k)}`;
-  const chips = days.map((d) => { const n = byDay(d).length; return `<button class="calday ${d === k ? 'on' : ''} ${n ? '' : 'none'}" data-calday="${d}"><span>${d === today ? 'Hoy' : cap(wd(d, 'short'))}</span><b>${dnum(d)}</b></button>`; }).join('');
-  const first = list.map((a) => a.ev.commence_time).sort()[0];
-  const withOdds = list.filter((a) => a.ev.lines?.mlHome || a.markets?.length).length;
-  const startLab = S.liga === 'nba' ? 'primer salto' : S.liga === 'nfl' ? 'primer kickoff' : 'primer partido';
-  const kpis = `<div class="calk"><div class="card"><b>${list.length}</b><span>partido${list.length === 1 ? '' : 's'}</span></div>
-    <div class="card"><b>${first ? fmtTime(first) : '–'}</b><span>${startLab}</span></div>
-    <div class="card"><b>${withOdds ? withOdds : '–'}</b><span>${withOdds ? 'con cuotas de la casa' : 'cuotas y props: el mismo día'}</span></div></div>`;
-  let html = `<div class="calhead"><span class="calsub">${esc(cap(title))}</span><h2>Calendario</h2></div><div class="caldays">${chips}</div>${kpis}`;
-  if (!list.length) return html + `<div class="card empty">No hay partidos ${k === today ? 'hoy' : 'este día'} en esta liga.</div>`;
-  html += '<div class="grid">';
-  for (const a of list) {
-    const ev = a.ev;
-    html += `<div class="card mcard ${ev.state === 'post' ? 'done' : ''}" data-open="${esc(ev.id)}">
-      <div class="mrow">${ord(ev, teamBlock(ev.away_logo, ev.away_abbr || ev.away_team, ev.away_rec), teamBlock(ev.home_logo, ev.home_abbr || ev.home_team, ev.home_rec)).join(centerBlock(ev))}</div>
-      ${probBar(probsOf(a), ev)}
-    </div>`;
+  const LV = S.lv, all = S.analysis, favs = getMFavs(), today = todayKey();
+  const minK = addDays(today, DAY_MIN), maxK = addDays(today, DAY_MAX);
+  if (S.calLiga !== S.liga) { S.calLiga = S.liga; S.calDay = null; S.calAuto = true; }
+  if (!S.calDay || S.calDay < minK || S.calDay > maxK) S.calDay = today;
+  // NBA/NFL: si hoy no hay partidos, se abre el primer día que tenga
+  if (S.calAuto && S.updated) { S.calAuto = false; if (!all.some((a) => dayOf(a.ev) === S.calDay)) S.calDay = all.filter((a) => a.ev.state !== 'post').map((a) => dayOf(a.ev)).sort()[0] || today; }
+  const k = S.calDay;
+  const dayList = all.filter((a) => dayOf(a.ev) === k && fcVisible(a));
+  let list = LV.tab === 'fav' ? all.filter((a) => favs.has(a.ev.id)) : dayList;
+  const cnt = (st) => list.filter((a) => a.ev.state === st).length;
+  const nIn = cnt('in'), nPost = cnt('post'), nPre = cnt('pre');
+  if (LV.filter) list = list.filter((a) => a.ev.state === LV.filter);
+  const tab = (t, lab) => `<button class="${LV.tab === t ? 'on' : ''}" data-lvtab="${t}">${lab}</button>`;
+  const fchip = (f, lab, n) => `<button class="lf ${f === 'in' ? 'live' : ''} ${LV.filter === f ? 'on' : ''}" data-lf="${f}">${lab}${n != null ? ` (${n})` : ''}</button>`;
+  const next = addDays(k, 1), crosses = S.liga !== 'fc' && dayList.some((a) => limaDay(a.ev.commence_time) !== k);
+  const night = crosses ? `Noche del ${wd(k, 'long')} ${dnum(k)} al ${wd(next, 'long')} ${dnum(next)} de ${monthOf(next)}` : '';
+  let body;
+  if (LV.tab === 'comps') {
+    const keys = LG_ORDER.filter((sk) => all.some((a) => a.ev.sport_key === sk));
+    const item = (sk, name, area, logo, n) => `<button class="lcomp ${(S.liga !== 'fc' || S.fc === sk) ? 'on' : ''}" data-lcomp="${sk}">${logoImg(logo, 'lglogo')}<div><b>${esc(name)}</b><span class="mut tiny">${esc(area)}</span></div><span class="lgcount">${n}</span></button>`;
+    body = (S.liga === 'fc' ? `<button class="lcomp ${S.fc === 'all' ? 'on' : ''}" data-lcomp="all"><i class="nologo lglogo"></i><div><b>Todas las competiciones</b><span class="mut tiny">${all.filter((a) => dayOf(a.ev) === k).length} partidos este día</span></div></button>` : '')
+      + keys.map((sk) => { const rows = all.filter((a) => a.ev.sport_key === sk); return item(sk, ...(LG_META[sk] || [sk, '']), rows.find((a) => a.ev.league_logo)?.ev.league_logo, rows.filter((a) => dayOf(a.ev) === k).length); }).join('')
+      || `<div class="lempty mut">${S.updated ? 'Sin competiciones cargadas.' : 'Cargando…'}</div>`;
+  } else {
+    const groups = groupBy(list);
+    body = groups.map(([sk, rows]) => lvGroup(sk, rows, favs, { day: LV.tab === 'fav' })).join('')
+      || `<div class="lempty mut">${!S.updated ? 'Cargando partidos…' : LV.tab === 'fav' ? 'Toca la ☆ de un partido para guardarlo aquí.' : LV.filter ? 'No hay partidos con este filtro.' : `No hay partidos ${k === today ? 'hoy' : 'este día'}.`}</div>`;
   }
-  return html + '</div>';
+  const filt = S.liga === 'fc' && S.fc !== 'all' && LV.tab !== 'comps' ? `<div class="lnight"><button class="lchip on" data-lcomp="all">${esc(LG_META[S.fc]?.[0] || '')} ✕</button></div>` : '';
+  const left = `<div class="card lvmain">
+    <div class="lvtabs">${tab('all', 'Todos')}${tab('fav', 'Favoritos')}${tab('comps', 'Competiciones')}
+      <div class="lday"><button data-lday="-1" ${k <= minK ? 'disabled' : ''} aria-label="Día anterior">‹</button><b>${esc(dayLabel(k))}</b><button data-lday="1" ${k >= maxK ? 'disabled' : ''} aria-label="Día siguiente">›</button></div></div>
+    ${LV.tab === 'comps' ? '' : `<div class="lvbar">${fchip('in', 'En vivo', nIn)}${fchip('post', 'Finalizados', nPost)}${fchip('pre', 'Próximos', nPre)}
+      <label class="ltog">Cuotas <button class="tog ${LV.odds ? 'on' : ''}" data-lodds="1" aria-label="Mostrar cuotas"><i></i></button></label></div>`}
+    ${night ? `<div class="lnight mut tiny">${esc(cap(night))} · hora Lima</div>` : ''}${filt}
+    ${body}</div>`;
+  return `<div class="lv"><div>${left}</div><aside class="lvside">${featPanel(favs)}</aside></div>`;
+}
+
+// Destacados: en vivo primero, luego las competiciones más importantes, partidos parejos y los más cercanos
+function featuredList() {
+  const now = Date.now();
+  const score = (a) => {
+    const ev = a.ev, p = probsOf(a); let s = (LG_WEIGHT[ev.sport_key] || 4) * 10;
+    if (ev.state === 'in') s += 60;
+    if (p?.home != null && p?.away != null) s += 15 * (1 - Math.abs(p.home - p.away));
+    return s - Math.max(0, (new Date(ev.commence_time) - now) / 36e5) * 0.6;
+  };
+  return S.analysis.filter((a) => a.ev.state !== 'post').map((a) => [a, score(a)]).sort((x, y) => y[1] - x[1]).map((x) => x[0]);
+}
+function featCard(a) {
+  const ev = a.ev, p = probsOf(a), L = ev.lines || {}, soc = homeFirst(ev);
+  const big = (s) => `<div class="fteam">${logoImg(teamLogo(ev, s), 'flogo')}<b>${esc(teamName(ev, s))}</b></div>`;
+  const mid = ev.state === 'pre'
+    ? `<div class="fmid"><b class="ftime">${fmtTime(ev.commence_time)}</b><span class="mut tiny">${esc(fmtDay(ev.commence_time))} · hora Lima</span></div>`
+    : `<div class="fmid"><b class="fscore ${ev.state === 'in' ? 'live' : ''}">${ord(ev, esc(ev.score?.[0]), esc(ev.score?.[1])).join(' - ')}</b><span class="${ev.state === 'in' ? 'livec' : 'mut'} tiny">${esc(ev.state === 'in' ? liveClock(ev) : 'Final')}</span></div>`;
+  const opts = soc ? ['home', 'draw', 'away'] : ['away', 'home'];
+  const fav = p ? opts.reduce((b, s) => ((p[s] ?? -1) > (p[b] ?? -1) ? s : b), opts[0]) : null;
+  const pill = (s) => `<div class="fpill ${fav === s ? 'on' : ''}">${s === 'draw' ? '<i class="x">X</i>' : logoImg(teamLogo(ev, s))}<span><b>${pctEs(p?.[s])}</b><small>${p?.[s] ? 'justa ' + fmtOdd(1 / p[s]) : ''}</small></span></div>`;
+  const price = (s) => (s === 'home' ? L.mlHome : s === 'away' ? L.mlAway : L.mlDraw);
+  const oddLab = (s) => (s === 'draw' ? 'X' : soc ? (s === 'home' ? '1' : '2') : esc(s === 'home' ? ev.home_abbr : ev.away_abbr));
+  const hasOdds = opts.some((s) => price(s));
+  return `<div class="card feat">
+    <div class="fhead">${logoImg(ev.league_logo, 'lglogo')}<b>${esc(LG_META[ev.sport_key]?.[0] || '')}</b>${ev.sport_key === 'soccer_conmebol_copa_libertadores' && ev.neutral ? '<span class="chip okc">Final</span>' : ''}</div>
+    <div class="fmain" data-open="${esc(ev.id)}">${ord(ev, big('away'), big('home')).join(mid)}</div>
+    <div class="fbox"><div class="fwh"><b>¿Quién gana?</b><span class="mut tiny">${esc(p?.src || 'Modelo calculándose…')}</span></div>
+      <div class="fpills" style="--n:${opts.length}">${opts.map(pill).join('')}</div></div>
+    <div class="fbox"><div class="fwh"><b>Cuotas ${soc ? '1X2' : 'ganador'}</b>${ev.state === 'in' ? '<span class="livec tiny">En vivo</span>' : ''}<span class="mut tiny">${hasOdds ? esc(ev.provider || 'Casa') : 'la casa aún no publica'}</span></div>
+      <div class="frow" style="--n:${opts.length}">${opts.map((s) => `<div class="fodd"><i>${oddLab(s)}</i><b>${price(s) ? fmtOdd(price(s)) : '–'}</b></div>`).join('')}</div>
+      <button class="flink" data-open="${esc(ev.id)}">Ver partido y más mercados ›</button></div></div>`;
+}
+function featPanel(favs) {
+  const list = featuredList();
+  if (!list.length) return `<div class="card lempty mut">${S.updated ? 'No hay partidos próximos para destacar.' : 'Cargando destacados…'}</div>`;
+  const n = Math.min(5, list.length), i = ((S.lv.feat % n) + n) % n;
+  const dots = Array.from({ length: n }, (_, j) => `<button class="${j === i ? 'on' : ''}" data-featgo="${j}" aria-label="Destacado ${j + 1}"></button>`).join('');
+  const more = list.filter((_, j) => j !== i).slice(0, 6);
+  return `${featCard(list[i])}
+    <div class="fnav"><button data-feat="-1">‹ Anterior</button><div class="dots">${dots}</div><button data-feat="1">Siguiente ›</button></div>
+    ${more.length ? `<div class="card hl"><h4>PARTIDOS DESTACADOS</h4>${more.map((a) => lvRow(a, favs, { league: true, day: true })).join('')}</div>` : ''}`;
 }
 // Picks: solo los que pasan las reglas de cada modelo (10 pp, umbrales, cuota mínima)
 const SIDE_LABEL = (ev, m, side, lines) => {
@@ -2392,7 +2465,16 @@ function legNow(it) {
 document.addEventListener('click', (e) => {
   const t = e.target.closest('button,[data-open],[data-pl],[data-openpl]');
   if (!t) return;
-  if (t.dataset.calday) { S.calDay = t.dataset.calday; return render(); }
+  // Lista de partidos
+  if (t.dataset.lday) { S.calDay = addDays(S.calDay || todayKey(), +t.dataset.lday); if (S.lv.tab === 'fav') S.lv.tab = 'all'; return render(); }
+  if (t.dataset.lvtab) { S.lv.tab = t.dataset.lvtab; return render(); }
+  if (t.dataset.lf) { S.lv.filter = S.lv.filter === t.dataset.lf ? '' : t.dataset.lf; return render(); }
+  if (t.dataset.lodds) { S.lv.odds = !S.lv.odds; store.set('lvOdds', S.lv.odds); return render(); }
+  if (t.dataset.lgtoggle) { S.lv.closed[t.dataset.lgtoggle] = !S.lv.closed[t.dataset.lgtoggle]; return render(); }
+  if (t.dataset.lcomp) { if (S.liga === 'fc') { S.fc = t.dataset.lcomp; store.set('fc', S.fc); } S.lv.tab = 'all'; return render(); }
+  if (t.dataset.mfav) { e.stopPropagation(); const f = getMFavs(); f.has(t.dataset.mfav) ? f.delete(t.dataset.mfav) : f.add(t.dataset.mfav); store.set(mfavKey(), [...f]); return render(); }
+  if (t.dataset.feat) { S.lv.feat += +t.dataset.feat; return render(); }
+  if (t.dataset.featgo) { S.lv.feat = +t.dataset.featgo; return render(); }
   if (t.dataset.fcf) { S.fc = t.dataset.fcf; store.set('fc', S.fc); return render(); }
   if (t.dataset.dteam) { S.detail.team = t.dataset.dteam; return render(); }
   // Props
@@ -2496,14 +2578,15 @@ const recs = (c) => {
 };
 async function fetchEspn() {
   // 7 noches desde hoy (+1 día para los partidos de madrugada de la última). En fútbol, todas las ligas y copas.
-  const dates = Array.from({ length: 8 }, (_, i) => limaDay(Date.now() - 6 * 36e5 + i * 864e5).replace(/-/g, ''));
+  // desde ayer (para ver los finalizados) hasta 7 noches adelante
+  const dates = Array.from({ length: 9 }, (_, i) => limaDay(Date.now() - 6 * 36e5 + (i - 1) * 864e5).replace(/-/g, ''));
   const jobs = leagueKeys().flatMap((sk) => dates.map((d) => ({ sk, path: ESPN[sk], d })));
   const pages = await Promise.all(jobs.map((j) => fetch(`https://site.api.espn.com/apis/site/v2/sports/${j.path}/scoreboard?dates=${j.d}`).then((r) => (r.ok ? r.json() : { events: [] })).catch(() => ({ events: [] }))));
   const seen = new Set(), raw = [];
-  pages.forEach((p, i) => { for (const e of p.events || []) if (!seen.has(e.id)) { seen.add(e.id); raw.push([e, jobs[i].sk, jobs[i].path]); } });
+  pages.forEach((p, i) => { for (const e of p.events || []) if (!seen.has(e.id)) { seen.add(e.id); raw.push([e, jobs[i].sk, jobs[i].path, p.leagues?.[0]?.logos?.[0]?.href]); } });
   if (!raw.length && pages.every((p) => !p.events)) throw new Error('No se pudo conectar con ESPN');
 
-  return raw.map(([e, sk, path]) => {
+  return raw.map(([e, sk, path, lgLogo]) => {
     const c = e.competitions[0];
     const home = c.competitors.find((x) => x.homeAway === 'home'), away = c.competitors.find((x) => x.homeAway === 'away');
     const H = home.team.displayName, A = away.team.displayName;
@@ -2523,7 +2606,9 @@ async function fetchEspn() {
     return {
       id: e.id, sport_key: sk, commence_time: e.date, home_team: H, away_team: A,
       home_logo: home.team.logo, away_logo: away.team.logo,
-      path, home_id: String(home.team.id), away_id: String(away.team.id), neutral: !!c.neutralSite,
+      path, league_logo: lgLogo, home_id: String(home.team.id), away_id: String(away.team.id),
+      // la final de la Libertadores es a partido único en sede neutral (ESPN no siempre lo marca)
+      neutral: !!c.neutralSite || (path === 'soccer/conmebol.libertadores' && new Date(e.date).getUTCMonth() >= 10),
       home_abbr: home.team.abbreviation || H.slice(0, 3).toUpperCase(), away_abbr: away.team.abbreviation || A.slice(0, 3).toUpperCase(),
       home_rec: recs(home), away_rec: recs(away),
       total: lines.total ?? null, lines,
