@@ -318,7 +318,7 @@ const teamLeague = (path, id) => memo('tl' + id, 864e5, async () => {
 });
 // Fuerza relativa de cada liga (goles que vale un equipo medio de esa liga frente a uno medio de la Premier),
 // calibrada a grandes rasgos con el coeficiente UEFA
-const LEAGUE_STR = {
+export const LEAGUE_STR = {
   'eng.1': 1, 'esp.1': 0.95, 'ita.1': 0.92, 'ger.1': 0.92, 'fra.1': 0.85, 'por.1': 0.76, 'ned.1': 0.75, 'bel.1': 0.7,
   'tur.1': 0.68, 'cze.1': 0.63, 'gre.1': 0.63, 'aut.1': 0.62, 'sui.1': 0.62, 'sco.1': 0.6, 'den.1': 0.6, 'nor.1': 0.58,
   'pol.1': 0.57, 'isr.1': 0.55, 'cro.1': 0.56, 'srb.1': 0.56, 'ukr.1': 0.56, 'swe.1': 0.55, 'cyp.1': 0.54, 'rus.1': 0.58,
@@ -329,9 +329,19 @@ const LEAGUE_STR = {
   'per.1': 0.47, 'bol.1': 0.45, 'ven.1': 0.43, 'mex.1': 0.64, 'usa.1': 0.6,
 };
 const CUP_STR_DEFAULT = 0.5, CUP_SELF_STR = 0.8; // 0,8 = nivel medio de un equipo de copa frente a la Premier
-const CUP_HOME = 1.12, CUP_AWAY = 0.9, CUP_SHRINK = 0.85; // localía típica en copas europeas
+// Parámetros del modelo de copas (exportados para poder recalibrarlos con partidos ya jugados)
+// goals = ajuste de goles en fase de grupos/liga · goalsKO = en eliminatorias · blend = peso del rating en esta copa
+export const CUP = {
+  uefa: { home: 1.12, away: 0.9, shrink: 0.85, blend: 0, goals: 1, goalsKO: 1, koFlat: 1 },
+  // Libertadores: calibrado con los 154 partidos jugados de 2026 (log-loss 1,069 → ~1,01). Las eliminatorias son
+  // cerradas (1,8 goles y 36 % de empates por partido), así que se bajan los goles y se acerca a los dos equipos.
+  conmebol: { home: 1.12, away: 0.9, shrink: 0.55, blend: 0.5, goals: 0.95, goalsKO: 0.7, koFlat: 0.4 },
+};
+const isKO = (ev) => !!ev.stage && !/group|league/.test(ev.stage);
 async function fitCup(path) { return { kind: 'cup', path, nGames: 0 }; }
 async function predictCup(M, ev, ctx) {
+  const P = CUP[/conmebol/.test(ev.path) ? 'conmebol' : 'uefa'];
+  const CUP_HOME = P.home, CUP_AWAY = P.away, CUP_SHRINK = P.shrink;
   const side = async (id) => {
     const slug = await teamLeague(ev.path, id);
     if (slug && !/uefa|fifa|conmebol/.test(slug)) {
@@ -352,10 +362,24 @@ async function predictCup(M, ev, ctx) {
   const rh = { att: sh(h.r.att) * h.S, def: sh(h.r.def) / h.S, gp: h.r.gp, promoted: h.r.promoted };
   const ra = { att: sh(a.r.att) * a.S, def: sh(a.r.def) / a.S, gp: a.r.gp, promoted: a.r.promoted };
   const ab = absences(ctx);
-  const lh = media * hf * rh.att * ra.def * ab.h.att * ab.a.def, la = media * af * ra.att * rh.def * ab.a.att * ab.h.def;
+  let lh = media * hf * rh.att * ra.def * ab.h.att * ab.a.def, la = media * af * ra.att * rh.def * ab.a.att * ab.h.def;
+  // Mezcla con lo que cada equipo hizo en esta misma copa (contra rivales de otras ligas)
+  let cupOnly = null;
+  if (P.blend > 0) {
+    const C = await leagueLight(ev.path), ch = C?.R[String(ev.home_id)], ca = C?.R[String(ev.away_id)];
+    if (ch && ca) {
+      const lhC = C.media * hf * ch.att * ca.def, laC = C.media * af * ca.att * ch.def;
+      cupOnly = { lh: lhC, la: laC };
+      lh = Math.pow(lh, 1 - P.blend) * Math.pow(lhC, P.blend); la = Math.pow(la, 1 - P.blend) * Math.pow(laC, P.blend);
+    }
+  }
+  const gf = isKO(ev) ? P.goalsKO : P.goals;
+  lh *= gf; la *= gf;
+  // En eliminatorias los partidos son más cerrados: se acerca la proporción entre ambos (misma media geométrica)
+  if (isKO(ev) && P.koFlat !== 1) { const g = Math.sqrt(lh * la), q = Math.pow(lh / la, P.koFlat / 2); lh = g * q; la = g / q; }
   const live = ev.state === 'in' ? { minute: parseInt(ev.clock) || null, sh: +ev.score?.[1] || 0, sa: +ev.score?.[0] || 0 } : null;
   const s = simSoccer(lh, la, live?.minute ?? null, live?.sh, live?.sa);
-  const why = { kind: 'soccer', cup: { h: { ...h, raw: h.r }, a: { ...a, raw: a.r }, media, hf, af }, homeAvg: media * hf, awayAvg: media * af, media, rh, ra, live, abs: ab };
+  const why = { kind: 'soccer', cup: { h: { ...h, raw: h.r }, a: { ...a, raw: a.r }, media, hf, af, cupOnly, blend: cupOnly ? P.blend : 0, goals: gf, ko: isKO(ev), shrink: P.shrink, koFlat: P.koFlat }, homeAvg: media * hf, awayAvg: media * af, media, rh, ra, live, abs: ab };
   const src = (x, ab) => (x.self ? `${ab}: ESPN no tiene su liga → rating con sus partidos en la copa` : `${ab} viene de ${x.slug.toUpperCase()} (fuerza ${x.S.toFixed(2)})`);
   return soccerFinish(ev, ctx, s, lh, la, why, [`Copa: ${src(h, ev.home_abbr)} · ${src(a, ev.away_abbr)}`, ...ab.notes(ev)], 0);
 }

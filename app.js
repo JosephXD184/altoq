@@ -1,5 +1,5 @@
 // ALTOQ · login con Google (Firebase), cuotas en tiempo real (The Odds API) y detector de valor (EV+).
-import { modelFor, pendingReason, summaryFor, logPrediction, settleResults, registryStats } from './model.js?v=14';
+import { modelFor, pendingReason, summaryFor, logPrediction, settleResults, registryStats } from './model.js?v=15';
 const CFG = window.RUSHTOP_CONFIG || {};
 const TZ = 'America/Lima';
 const $ = (s) => document.querySelector(s);
@@ -557,7 +557,7 @@ function featCard(a) {
   const oddLab = (s) => (s === 'draw' ? 'X' : soc ? (s === 'home' ? '1' : '2') : esc(s === 'home' ? ev.home_abbr : ev.away_abbr));
   const hasOdds = opts.some((s) => price(s));
   return `<div class="card feat">
-    <div class="fhead">${logoImg(ev.league_logo, 'lglogo')}<b>${esc(LG_META[ev.sport_key]?.[0] || '')}</b>${ev.sport_key === 'soccer_conmebol_copa_libertadores' && ev.neutral ? '<span class="chip okc">Final</span>' : ''}</div>
+    <div class="fhead">${logoImg(ev.league_logo, 'lglogo')}<b>${esc(LG_META[ev.sport_key]?.[0] || '')}</b>${ev.stage === 'final' ? '<span class="chip okc">Final</span>' : ''}</div>
     <div class="fmain" data-open="${esc(ev.id)}">${ord(ev, big('away'), big('home')).join(mid)}</div>
     <div class="fbox"><div class="fwh"><b>¿Quién gana?</b><span class="mut tiny">${esc(p?.src || 'Modelo calculándose…')}</span></div>
       <div class="fpills" style="--n:${opts.length}">${opts.map(pill).join('')}</div></div>
@@ -1003,8 +1003,8 @@ function whyBox(a) {
   if (w.cup) {
     const c = w.cup, L = (x) => x.slug.toUpperCase();
     steps.push(`<b>Liga de origen.</b> En copa no hay una sola tabla, así que cada equipo trae su rating de su propia liga: ${H} de <b>${L(c.h)}</b> (ataque ${n2(c.h.raw.att)}, defensa ${n2(c.h.raw.def)} frente a su liga) y ${A} de <b>${L(c.a)}</b> (ataque ${n2(c.a.raw.att)}, defensa ${n2(c.a.raw.def)}).`);
-    steps.push(`<b>Fuerza de cada liga.</b> Ser bueno en una liga débil vale menos: se recorta un poco el rating (^0,85, porque dominar tu liga exagera tu nivel) y se multiplica el ataque y se divide la defensa por la fuerza de la liga (Premier = 1, calibrada con el coeficiente UEFA): ${L(c.h)} ${n2(c.h.S)}, ${L(c.a)} ${n2(c.a.S)}. Queda ${H} ataque ${n2(rh.att)} / defensa ${n2(rh.def)} y ${A} ${n2(ra.att)} / ${n2(ra.def)}.`);
-    steps.push(`<b>Goles esperados.</b> Media de goles de las dos ligas ${n2(c.media)} × localía (${n2(c.hf)} local, ${n2(c.af)} visita) × ataque × defensa rival: ${H} <b>${n2(pr.xgHome)}</b>, ${A} <b>${n2(pr.xgAway)}</b>.`);
+    steps.push(`<b>Fuerza de cada liga.</b> Ser bueno en una liga débil vale menos: se recorta el rating (^${String(c.shrink ?? 0.85).replace('.', ',')}, porque dominar tu liga exagera tu nivel) y se multiplica el ataque y se divide la defensa por la fuerza de la liga (Premier = 1, calibrada con el coeficiente UEFA): ${L(c.h)} ${n2(c.h.S)}, ${L(c.a)} ${n2(c.a.S)}. Queda ${H} ataque ${n2(rh.att)} / defensa ${n2(rh.def)} y ${A} ${n2(ra.att)} / ${n2(ra.def)}.`);
+    steps.push(`<b>Goles esperados.</b> Media de goles de las dos ligas ${n2(c.media)} × localía (${n2(c.hf)} local, ${n2(c.af)} visita) × ataque × defensa rival${c.blend ? `, mezclado al ${Math.round(c.blend * 100)} % con lo que hizo cada uno en esta misma copa (${H} ${n2(c.cupOnly.lh)}, ${A} ${n2(c.cupOnly.la)} goles esperados solo con la copa)` : ''}${c.goals !== 1 ? ` y × ${n2(c.goals)} por el nivel de goles de ${c.ko ? 'las eliminatorias' : 'esta fase'}` : ''}${c.ko && c.koFlat < 1 ? '. Eliminatoria: partidos más cerrados, así que se acerca a los dos equipos' : ''}: ${H} <b>${n2(pr.xgHome)}</b>, ${A} <b>${n2(pr.xgAway)}</b>.`);
   } else {
   steps.push(`<b>Fuerza de cada equipo.</b> Ataque y defensa relativos a la media de la liga, con la temporada actual mezclada con 15 partidos “ficticios” a su nivel de la temporada pasada (cuanto más se juega, más pesa lo actual). ${H} (${rh.gp} PJ): ataque ${rel(rh.att, 'que la media')}, defensa ${rel(rh.def, 'goles que la media')}${rh.promoted ? ' · sin temporada anterior: tratado como ascendido' : ''}. ${A} (${ra.gp} PJ): ataque ${rel(ra.att, 'que la media')}, defensa ${rel(ra.def, 'goles que la media')}${ra.promoted ? ' · sin temporada anterior: tratado como ascendido' : ''}. En defensa, menos de 1 es mejor.`);
   steps.push(`<b>Goles esperados.</b> ${H}: ${n2(w.homeAvg)} (media de goles del local en la liga) × 1,04 × ataque ${n2(rh.att)} × defensa rival ${n2(ra.def)} = <b>${n2(pr.xgHome)}</b>. ${A}: ${n2(w.awayAvg)} × 1,04 × ${n2(ra.att)} × ${n2(rh.def)} = <b>${n2(pr.xgAway)}</b>.`);
@@ -2608,7 +2608,7 @@ async function fetchEspn() {
       home_logo: home.team.logo, away_logo: away.team.logo,
       path, league_logo: lgLogo, home_id: String(home.team.id), away_id: String(away.team.id),
       // la final de la Libertadores es a partido único en sede neutral (ESPN no siempre lo marca)
-      neutral: !!c.neutralSite || (path === 'soccer/conmebol.libertadores' && new Date(e.date).getUTCMonth() >= 10),
+      neutral: !!c.neutralSite || e.season?.slug === 'final', stage: e.season?.slug || '',
       home_abbr: home.team.abbreviation || H.slice(0, 3).toUpperCase(), away_abbr: away.team.abbreviation || A.slice(0, 3).toUpperCase(),
       home_rec: recs(home), away_rec: recs(away),
       total: lines.total ?? null, lines,
