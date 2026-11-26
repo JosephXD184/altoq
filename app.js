@@ -1,5 +1,5 @@
 // ALTOQ · login con Google (Firebase), cuotas en tiempo real (The Odds API) y detector de valor (EV+).
-import { modelFor, pendingReason, summaryFor, logPrediction, settleResults, registryStats } from './model.js?v=21';
+import { modelFor, pendingReason, summaryFor, logPrediction, preLogged, settleResults, registryStats } from './model.js?v=22';
 const CFG = window.RUSHTOP_CONFIG || {};
 const TZ = 'America/Lima';
 const $ = (s) => document.querySelector(s);
@@ -221,6 +221,10 @@ async function runModels(token) {
         try { ev.pred = await mdl.predict(M, ev, { injuries, leaders, lines: ev.lines || {}, absence: (s) => SF.abs[ev.id]?.[s] }); } catch { ev.pred = null; }
         if (token !== S.loadToken) return;
         if (ev.pred) logPrediction(ev, ev.pred);
+        // ya empezó: también se calcula como si no hubiera empezado (lo que el modelo daba antes del partido)
+        if (ev.state !== 'pre' && !ev.prePred) {
+          try { ev.prePred = await mdl.predict(M, { ...ev, state: 'pre', score: null, clock: '', detail: '' }, { injuries, leaders, lines: ev.lines || {}, absence: (s) => SF.abs[ev.id]?.[s] }); } catch {}
+        }
       }
     } catch (e) { errs.push(mdl.name + ': ' + e.message); }
   }
@@ -248,6 +252,11 @@ function schedule() {
   // Directo: cada 10 s solo el marcador de las ligas que tienen partidos en juego
   S.fastTimer = setInterval(() => { if (!document.hidden) fastLive(); }, LIVE_MS);
 }
+// Goles del partido (fútbol) desde el marcador de ESPN: quién, minuto y equipo
+const goalsOf = (c) => (c?.details || []).filter((d) => d.scoringPlay).map((d) => ({
+  team: String(d.team?.id || ''), name: d.athletesInvolved?.[0]?.shortName || d.athletesInvolved?.[0]?.displayName || 'Gol',
+  min: d.clock?.displayValue || '', pen: !!d.penaltyKick, og: !!d.ownGoal,
+}));
 const LIVE_MS = 10000;
 const bust = (u) => u + (u.includes('?') ? '&' : '?') + '_=' + Date.now(); // evita respuestas guardadas por el navegador
 // Partidos que están (o deberían estar) en juego ahora
@@ -266,7 +275,8 @@ async function fastLive() {
       const c = e.competitions?.[0], home = c?.competitors?.find((x) => x.homeAway === 'home'), away = c?.competitors?.find((x) => x.homeAway === 'away');
       const st = e.status?.type?.state, score = st === 'pre' ? null : [away?.score, home?.score];
       if (st !== ev.state || e.status?.displayClock !== ev.clock || JSON.stringify(score) !== JSON.stringify(ev.score)) {
-        Object.assign(ev, { state: st, detail: e.status?.type?.shortDetail, clock: e.status?.displayClock, score }); changed = true;
+        if (ev.state === 'pre' && st !== 'pre' && !ev.prePred && ev.pred) ev.prePred = ev.pred; // acaba de empezar
+        Object.assign(ev, { state: st, detail: e.status?.type?.shortDetail, clock: e.status?.displayClock, score, goals: goalsOf(c) }); changed = true;
       }
     }
     if (changed && !document.activeElement?.matches?.('input, select')) render();
@@ -479,6 +489,19 @@ function rowStatus(ev) {
   return '<span class="rs">–</span>';
 }
 // Fila de partido: hora y estado · equipos con la probabilidad del modelo y el marcador · favorito
+// Probabilidades de ANTES del partido: las que el modelo registró antes del inicio; si no hay registro,
+// el modelo recalculado como si no hubiera empezado
+function preP(ev) {
+  const l = preLogged(ev.id);
+  if (l && l[0] != null) return { home: l[0], draw: l[1], away: l[2] };
+  const p = ev.state === 'pre' ? ev.pred : ev.prePred;
+  return p ? { home: p.pHome, draw: p.pDraw, away: p.pAway } : null;
+}
+// Favorita del modelo antes del partido (no cambia durante el juego)
+function prePick(ev) {
+  const p = preP(ev); if (!p) return null;
+  return ['home', 'draw', 'away'].filter((s) => p[s] != null).sort((x, y) => p[y] - p[x])[0];
+}
 function lvRow(a, favs, opt = {}) {
   const ev = a.ev, p = probsOf(a), st = ev.state, L = ev.lines || {};
   const sc = (s) => (st === 'pre' ? '' : esc(ev.score?.[s === 'home' ? 1 : 0] ?? ''));
@@ -487,10 +510,13 @@ function lvRow(a, favs, opt = {}) {
   // Rejilla de 2 filas: escudo · nombre · probabilidades · marcador. Las probabilidades van en una sola columna
   // que ocupa las dos filas, en el mismo orden que los equipos: arriba el de arriba, X (empate) al medio, abajo el de abajo
   const team = (s, i) => `<div class="lt ${won && won !== s ? 'lose' : ''} ${won === s ? 'win' : ''}" style="--r:${i + 1}">${logoImg(teamLogo(ev, s))}<span class="ln">${esc(teamName(ev, s))}</span><b class="ls">${sc(s)}</b></div>`;
-  // cada probabilidad con su letra: L (local), X (empate), V (visitante); la más probable va resaltada
-  const best = p ? ['home', 'draw', 'away'].filter((s) => p[s] != null).sort((x, y) => p[y] - p[x])[0] : null;
-  const [t1, t2] = ord(ev, 'away', 'home'), pv = (s) => `<span class="lpx ${s === best ? 'top' : ''}"><i>${s === 'home' ? 'L' : s === 'away' ? 'V' : 'X'}</i> ${p?.[s] != null ? pctEs(p[s]) : '–'}</span>`;
-  const draw = st !== 'post' && p ? `<span class="lps">${pv(t1)}${p.draw != null ? pv('draw') : ''}${pv(t2)}</span>` : '';
+  // cada probabilidad con su letra: L (local), X (empate), V (visitante). Los números son los de ahora (en vivo);
+  // terminado, los de antes del partido. El recuadro marca SIEMPRE la favorita del modelo antes de empezar
+  // (verde si acertó, rojo si falló, al terminar)
+  const pp = st === 'post' ? preP(ev) || p : p, best = prePick(ev);
+  const res = st === 'post' && ev.score ? (hs > as ? 'home' : as > hs ? 'away' : 'draw') : null;
+  const [t1, t2] = ord(ev, 'away', 'home'), pv = (s) => `<span class="lpx ${s === best ? 'top' + (res ? (res === s ? ' hit' : ' miss') : '') : ''}"><i>${s === 'home' ? 'L' : s === 'away' ? 'V' : 'X'}</i> ${pp?.[s] != null ? pctEs(pp[s]) : '–'}</span>`;
+  const draw = pp ? `<span class="lps">${pv(t1)}${pp.draw != null ? pv('draw') : ''}${pv(t2)}</span>` : '';
   const oddsDef = homeFirst(ev) ? [['1', L.mlHome], ['X', L.mlDraw], ['2', L.mlAway]] : [[ev.away_abbr, L.mlAway], [ev.home_abbr, L.mlHome]];
   const odds = S.lv.odds && st !== 'post' ? `<div class="lodds">${oddsDef.map(([k, v]) => `<span><i>${esc(k)}</i>${v ? fmtOdd(v) : '–'}</span>`).join('')}</div>` : '';
   const top = [opt.league ? `<span class="ltag2">${esc(LG_META[ev.sport_key]?.[0] || '')}</span>` : '', opt.day ? `<span>${esc(dayLabel(dayOf(ev)))}</span>` : ''].join('');
@@ -566,7 +592,7 @@ function featCard(a) {
     ? `<div class="fmid"><b class="ftime">${fmtTime(ev.commence_time)}</b><span class="mut tiny">${esc(fmtDay(ev.commence_time))} · hora Lima</span></div>`
     : `<div class="fmid"><b class="fscore ${ev.state === 'in' ? 'live' : ''}">${ord(ev, esc(ev.score?.[0]), esc(ev.score?.[1])).join(' - ')}</b><span class="${ev.state === 'in' ? 'livec' : 'mut'} tiny">${esc(ev.state === 'in' ? liveClock(ev) : 'Final')}</span></div>`;
   const opts = soc ? ['home', 'draw', 'away'] : ['away', 'home'];
-  const fav = p ? opts.reduce((b, s) => ((p[s] ?? -1) > (p[b] ?? -1) ? s : b), opts[0]) : null;
+  const fav = prePick(ev) || (p ? opts.reduce((b, s) => ((p[s] ?? -1) > (p[b] ?? -1) ? s : b), opts[0]) : null); // favorita de antes del partido
   const pill = (s) => `<div class="fpill ${fav === s ? 'on' : ''}">${s === 'draw' ? '<i class="x">X</i>' : logoImg(teamLogo(ev, s))}<span><b>${pctEs(p?.[s])}</b><small>${p?.[s] ? 'justa ' + fmtOdd(1 / p[s]) : ''}</small></span></div>`;
   const price = (s) => (s === 'home' ? L.mlHome : s === 'away' ? L.mlAway : L.mlDraw);
   const oddLab = (s) => (s === 'draw' ? 'X' : soc ? (s === 'home' ? '1' : '2') : esc(s === 'home' ? ev.home_abbr : ev.away_abbr));
@@ -905,8 +931,17 @@ function detailHeader(ev) {
     : `${ev.state === 'in' ? '<span class="tag live">EN VIVO</span>' : ''}<b class="score">${scoreTxt(ev)}</b><span class="mut">${esc(ev.detail)}</span>`;
   const awayB = `<div class="tb big">${ev.away_logo ? `<img src="${esc(ev.away_logo)}" alt="">` : ''}<b>${esc(ev.away_abbr)}</b><span class="mut">${sub(ev.away_rec, 'road')}</span></div>`;
   const homeB = `<div class="tb big">${ev.home_logo ? `<img src="${esc(ev.home_logo)}" alt="">` : ''}<b>${esc(ev.home_abbr)}</b><span class="mut">${sub(ev.home_rec, 'home')}</span></div>`;
+  // Goleadores de cada equipo, con el minuto, al lado del marcador (fútbol)
+  const scorers = (side, cls) => {
+    const tid = side === 'home' ? ev.home_id : ev.away_id, g = (ev.goals || []).filter((x) => x.team === String(tid));
+    return `<div class="hsc ${cls}">${g.map((x) => `<span>${esc(x.name)} <b>${esc(x.min)}</b>${x.pen ? ' <i>(p)</i>' : ''}${x.og ? ' <i>(a.g.)</i>' : ''}</span>`).join('')}</div>`;
+  };
+  const [sL, sR] = ord(ev, 'away', 'home');
+  const goalsOn = isSoccerEv(ev) && ev.state !== 'pre' && (ev.goals || []).length;
   return `<div class="dtop"><button class="icon-btn" data-act="back">‹</button><b>${esc(matchName(ev))}</b></div>
-  <div class="hero">${ord(ev, awayB, homeB).join(`<div class="cb">${center}</div>`)}</div>
+  <div class="hero ${goalsOn ? 'g5' : ''}">${goalsOn
+    ? `${ord(ev, awayB, homeB)[0]}${scorers(sL, 'l')}<div class="cb">${center}</div>${scorers(sR, 'r')}${ord(ev, awayB, homeB)[1]}`
+    : ord(ev, awayB, homeB).join(`<div class="cb">${center}</div>`)}</div>
   <div class="seg wide">
     <button data-dtab="partido" class="${S.detail.tab === 'partido' ? 'on' : ''}">Partido</button>
     ${isSoccerEv(ev) ? `<button data-dtab="stats" class="${S.detail.tab === 'stats' ? 'on' : ''}">Estadísticas</button>` : ''}
@@ -920,7 +955,9 @@ function viewDetail() {
   const a = S.analysis[ai], ev = a.ev;
   if (!ev.path) return detailHeader(ev) + `<div class="card empty">El detalle completo usa datos de ESPN.</div>`;
   if (S.detail.player) return isGuest() ? detailHeader(ev) + lockCard('Perfil completo del jugador, línea ajustable y boleto') : playerProfile();
-  const body = S.detail.tab === 'partido' ? partidoTab(a, ai) : S.detail.tab === 'stats' ? statsTab(a) : playersSub(a);
+  // Dentro del partido todo usa la predicción de ANTES del partido; las de ahora van en su propia sección
+  const aPre = preView(a);
+  const body = S.detail.tab === 'partido' ? partidoTab(aPre, ai, ev) : S.detail.tab === 'stats' ? statsTab(aPre) : playersSub(aPre);
   return detailHeader(ev) + body;
 }
 
@@ -933,12 +970,30 @@ function playersSub(a) {
 }
 
 // ----- Pestaña Partido -----
-function partidoTab(a, ai) {
-  const ev = a.ev;
+// El partido ya empezó: misma fila de análisis pero con la predicción de antes de empezar
+const preView = (a) => (a.ev.state !== 'pre' && a.ev.prePred ? { ...a, ev: { ...a.ev, pred: a.ev.prePred } } : a);
+// Probabilidades en vivo: cómo va el modelo con el marcador y el minuto actuales, frente a las de antes
+function liveProbCard(ev) {
+  if (ev.state !== 'in' || !ev.pred) return '';
+  const now = { home: ev.pred.pHome, draw: ev.pred.pDraw, away: ev.pred.pAway }, pre = preP(ev), pick = prePick(ev);
+  const opts = homeFirst(ev) ? ['home', 'draw', 'away'] : ['away', 'home'];
+  const lab = (s) => (s === 'draw' ? 'Empate' : s === 'home' ? ev.home_abbr : ev.away_abbr);
+  const cell = (s) => {
+    const d = pre?.[s] != null && now[s] != null ? Math.round((now[s] - pre[s]) * 100) : null;
+    return `<div class="lpc ${s === pick ? 'pick' : ''}"><span class="mut tiny">${esc(lab(s))}${s === pick ? ' · favorita antes' : ''}</span><b>${pctEs(now[s])}</b>
+      <span class="tiny ${d > 0 ? 'good' : d < 0 ? 'bad' : 'mut'}">${d == null ? '' : `antes ${pctEs(pre[s])} (${d > 0 ? '+' : ''}${d})`}</span></div>`;
+  };
+  const xg = '';
+  return `<div class="card"><div class="ihead"><h4>PROBABILIDADES EN VIVO</h4><span class="tag live">${esc(liveClock(ev))} · ${scoreTxt(ev)}</span></div>
+    <div class="lpcs" style="--n:${opts.length}">${opts.map(cell).join('')}</div>
+    <p class="mut tiny">El modelo recalculado con el marcador y el minuto actuales${xg}. Arriba siguen las probabilidades de antes del partido.</p></div>`;
+}
+function partidoTab(a, ai, liveEv) {
+  const ev = a.ev, live = liveEv ? liveProbCard(liveEv) : '';
   const sum = need('sum', ev.id, `${espnBase(ev.path)}/summary?event=${ev.id}`);
-  if (isGuest()) return ganadorSection(a, ai) + lockCard('El porqué del %, todas las salidas del modelo, historial, bajas, detalles y otros mercados');
-  if (ev.path.startsWith('soccer')) return ganadorSection(a, ai) + historySection(ev) + detailsSection(ev) + soccerBajasSection(ev, sum) + soccerMarketsSection(a);
-  return ganadorSection(a, ai) + historySection(ev) + injuriesSection(ev, sum) + detailsSection(ev) + marketsSection(a, ai);
+  if (isGuest()) return ganadorSection(a, ai) + live + lockCard('El porqué del %, todas las salidas del modelo, historial, bajas, detalles y otros mercados');
+  if (ev.path.startsWith('soccer')) return ganadorSection(a, ai) + live + historySection(ev) + detailsSection(ev) + soccerBajasSection(ev, sum) + soccerMarketsSection(a);
+  return ganadorSection(a, ai) + live + historySection(ev) + injuriesSection(ev, sum) + detailsSection(ev) + marketsSection(a, ai);
 }
 
 // Ganador: probabilidad del MODELO frente a lo que dice la cuota de la casa
@@ -2238,8 +2293,8 @@ function specParts(spec) {
 }
 function addGameLeg(spec) {
   const { evId, mk, sel, point, sname, team } = specParts(spec);
-  const a = S.analysis.find((x) => String(x.ev.id) === evId); if (!a) return;
-  const ev = a.ev, id = gId(spec);
+  const a0 = S.analysis.find((x) => String(x.ev.id) === evId); if (!a0) return;
+  const a = preView(a0), ev = a.ev, id = gId(spec); // misma probabilidad que se ve en la página del partido
   let s = getSlip();
   if (s.some((x) => x.id === id)) s = s.filter((x) => x.id !== id);
   else {
@@ -2700,6 +2755,9 @@ async function fetchEspn() {
       state: e.status.type.state, detail: e.status.type.shortDetail, clock: e.status.displayClock,
       score: e.status.type.state === 'pre' ? null : [away.score, home.score],
       pred: S.events.find((x) => x.id === e.id)?.pred, // se mantiene mientras se recalcula
+      // predicción de antes del partido: si la última vez seguía sin empezar, esa es la de antes
+      prePred: ((o) => o?.prePred || (o?.state === 'pre' ? o.pred : undefined))(S.events.find((x) => x.id === e.id)),
+      goals: goalsOf(c),
       provider: o?.provider?.name || 'DraftKings',
       bookmakers: markets.length ? [{ key: 'draftkings', title: o?.provider?.name || 'DraftKings', markets }] : [],
     };

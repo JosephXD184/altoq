@@ -419,7 +419,8 @@ function simSoccer(lh, la, minute, scoreH, scoreA) {
   let pH = H / N, pD = D / N, pA = A / N;
   // Tope de favorito 85%: el exceso se reparte entre empate y rival en proporción
   const cap = (fav, o1, o2) => { if (fav <= 0.85) return [fav, o1, o2]; const ex = fav - 0.85, s = o1 + o2 || 1; return [0.85, o1 + ex * o1 / s, o2 + ex * o2 / s]; };
-  if (pH > 0.85) [pH, pD, pA] = cap(pH, pD, pA); else if (pA > 0.85) [pA, pD, pH] = cap(pA, pD, pH);
+  // (solo antes del partido: en vivo, con marcador y minuto, un 4-1 al 80' sí puede pasar del 85 %)
+  if (minute == null) { if (pH > 0.85) [pH, pD, pA] = cap(pH, pD, pA); else if (pA > 0.85) [pA, pD, pH] = cap(pA, pD, pH); }
   const top = Object.entries(scores).sort((x, y) => y[1] - x[1]).slice(0, 3).map(([s, c]) => [s, c / N]);
   // Hándicap asiático equilibrado de medio gol (local)
   let best = null;
@@ -487,6 +488,10 @@ export async function summaryFor(path, id) { return memo('sum' + id, 6e5, () => 
 
 // Registro de predicciones (log-loss y Brier contra el mercado)
 const REG = 'rushtop:registro';
+// Probabilidades 1X2 que el modelo registró antes de empezar el partido ([local, empate, visitante]) o null
+export function preLogged(id) {
+  try { return JSON.parse(localStorage.getItem(REG) || '{}')[id]?.p || null; } catch { return null; }
+}
 export function logPrediction(ev, pred) {
   try {
     const r = JSON.parse(localStorage.getItem(REG) || '{}');
