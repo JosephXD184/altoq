@@ -1,5 +1,5 @@
 // ALTOQ · login con Google (Firebase), cuotas en tiempo real (The Odds API) y detector de valor (EV+).
-import { modelFor, pendingReason, summaryFor, logPrediction, settleResults, registryStats } from './model.js?v=17';
+import { modelFor, pendingReason, summaryFor, logPrediction, settleResults, registryStats } from './model.js?v=18';
 const CFG = window.RUSHTOP_CONFIG || {};
 const TZ = 'America/Lima';
 const $ = (s) => document.querySelector(s);
@@ -379,11 +379,17 @@ function render() {
     v.innerHTML = `<h2>${S.tab === 'valor' ? 'Picks del modelo' : 'Mi boleto'}</h2>` + lockCard(S.tab === 'valor' ? 'Los picks del modelo y las alertas de “Revisar”' : 'Tu boleto personal con stakes sugeridos');
     return;
   }
-  // las dos columnas de Partidos se desplazan por separado: se conserva su posición al repintar
-  const keep = ['.lvleft', '.lvside'].map((s) => v.querySelector(s)?.scrollTop || 0);
   v.innerHTML = { hoy: viewHoy, props: viewProps, valor: viewValor, boleto: viewBoleto, perfil: viewPerfil }[S.tab]();
-  ['.lvleft', '.lvside'].forEach((s, i) => { const el = v.querySelector(s); if (el && keep[i]) el.scrollTop = keep[i]; });
+  fitSide();
 }
+// Panel derecho de Partidos: un solo scroll (el de la página). Si es más alto que la pantalla, baja con la página
+// hasta que se ve su final y ahí se queda fijo, así no hace falta llegar al final de la lista para verlo entero.
+function fitSide() {
+  const side = document.querySelector('.lvside'); if (!side) return;
+  side.style.top = Math.min(76, window.innerHeight - side.offsetHeight - 96) + 'px';
+}
+window.addEventListener('resize', fitSide);
+document.addEventListener('load', (e) => { if (e.target.closest?.('.lvside')) fitSide(); }, true); // los escudos cambian la altura al cargar
 function renderStatus() {
   const fc = '';
   $('#status').innerHTML = `

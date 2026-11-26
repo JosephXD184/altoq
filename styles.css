@@ -425,9 +425,9 @@ body.wide main,body.wide .top-in{max-width:1200px}
 .lv{display:grid;grid-template-columns:minmax(0,1fr) 400px;gap:18px;align-items:start}
 .lvside{display:flex;flex-direction:column;gap:12px}
 .lvside>*{flex-shrink:0}
-/* cada columna con su propio desplazamiento (en pantallas anchas) */
-.lvleft,.lvside{position:sticky;top:76px;max-height:calc(100vh - 170px);overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;border-radius:16px}
-@media (max-width:920px){.lv{grid-template-columns:1fr}.lvleft,.lvside{position:static;max-height:none;overflow:visible}.lvside{order:-1}}
+/* panel derecho: baja con la página y, al llegar a su final, se queda fijo (top negativo calculado en fitSide) */
+.lvside{position:sticky;top:76px}
+@media (max-width:920px){.lv{grid-template-columns:1fr}.lvside{position:static;order:-1}}
 .lvmain{padding:0;overflow:hidden}
 .lvtabs{display:flex;align-items:center;gap:2px;padding:4px 12px 0;border-bottom:1px solid var(--edge);flex-wrap:wrap}
 .lvtabs>button{padding:13px 10px;font-weight:700;font-size:15px;color:var(--mut);border-bottom:2px solid transparent;margin-bottom:-1px}
