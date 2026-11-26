@@ -1,5 +1,5 @@
 // ALTOQ · login con Google (Firebase), cuotas en tiempo real (The Odds API) y detector de valor (EV+).
-import { modelFor, pendingReason, summaryFor, logPrediction, settleResults, registryStats } from './model.js?v=15';
+import { modelFor, pendingReason, summaryFor, logPrediction, settleResults, registryStats } from './model.js?v=17';
 const CFG = window.RUSHTOP_CONFIG || {};
 const TZ = 'America/Lima';
 const $ = (s) => document.querySelector(s);
@@ -379,7 +379,10 @@ function render() {
     v.innerHTML = `<h2>${S.tab === 'valor' ? 'Picks del modelo' : 'Mi boleto'}</h2>` + lockCard(S.tab === 'valor' ? 'Los picks del modelo y las alertas de “Revisar”' : 'Tu boleto personal con stakes sugeridos');
     return;
   }
+  // las dos columnas de Partidos se desplazan por separado: se conserva su posición al repintar
+  const keep = ['.lvleft', '.lvside'].map((s) => v.querySelector(s)?.scrollTop || 0);
   v.innerHTML = { hoy: viewHoy, props: viewProps, valor: viewValor, boleto: viewBoleto, perfil: viewPerfil }[S.tab]();
+  ['.lvleft', '.lvside'].forEach((s, i) => { const el = v.querySelector(s); if (el && keep[i]) el.scrollTop = keep[i]; });
 }
 function renderStatus() {
   const fc = '';
@@ -462,7 +465,7 @@ S.lv = { tab: 'all', filter: '', odds: store.get('lvOdds', false), closed: {}, f
 const logoImg = (src, cls = '') => (src ? `<img class="${cls}" src="${esc(src)}" alt="" loading="lazy">` : `<i class="nologo ${cls}"></i>`);
 const teamName = (ev, s) => (s === 'home' ? ev.home_team : ev.away_team);
 const teamLogo = (ev, s) => (s === 'home' ? ev.home_logo : ev.away_logo);
-const liveClock = (ev) => (homeFirst(ev) ? ev.clock && ev.clock !== "0'" ? ev.clock : ev.detail : ev.detail) || 'En vivo';
+const liveClock = (ev) => (/^(HT|Halftime)$/i.test(ev.detail || '') ? 'HT' : (homeFirst(ev) ? ev.clock && ev.clock !== "0'" ? ev.clock : ev.detail : ev.detail) || 'En vivo'); // en el descanso: HT
 
 function rowStatus(ev) {
   if (ev.state === 'in') return `<span class="rs live">${esc(liveClock(ev))}</span>`;
@@ -475,12 +478,14 @@ function lvRow(a, favs, opt = {}) {
   const sc = (s) => (st === 'pre' ? '' : esc(ev.score?.[s === 'home' ? 1 : 0] ?? ''));
   const hs = +ev.score?.[1], as = +ev.score?.[0];
   const won = st === 'post' && ev.score ? (hs > as ? 'home' : as > hs ? 'away' : '') : '';
-  const team = (s) => `<div class="lt ${won && won !== s ? 'lose' : ''} ${won === s ? 'win' : ''}">${logoImg(teamLogo(ev, s))}<span class="ln">${esc(teamName(ev, s))}</span><span class="lp">${st !== 'post' && p?.[s] != null ? pctEs(p[s]) : ''}</span><b class="ls">${sc(s)}</b></div>`;
+  // Rejilla de 2 filas: escudo · nombre · empate (ocupa las dos filas, al medio) · % del equipo · marcador
+  const team = (s, i) => `<div class="lt ${won && won !== s ? 'lose' : ''} ${won === s ? 'win' : ''}" style="--r:${i + 1}">${logoImg(teamLogo(ev, s))}<span class="ln">${esc(teamName(ev, s))}</span><span class="lp">${st !== 'post' && p?.[s] != null ? pctEs(p[s]) : ''}</span><b class="ls">${sc(s)}</b></div>`;
+  const draw = st !== 'post' && p?.draw != null ? `<span class="ld"><i>X</i>${pctEs(p.draw)}</span>` : '';
   const oddsDef = homeFirst(ev) ? [['1', L.mlHome], ['X', L.mlDraw], ['2', L.mlAway]] : [[ev.away_abbr, L.mlAway], [ev.home_abbr, L.mlHome]];
   const odds = S.lv.odds && st !== 'post' ? `<div class="lodds">${oddsDef.map(([k, v]) => `<span><i>${esc(k)}</i>${v ? fmtOdd(v) : '–'}</span>`).join('')}</div>` : '';
   const top = [opt.league ? `<span class="ltag2">${esc(LG_META[ev.sport_key]?.[0] || '')}</span>` : '', opt.day ? `<span>${esc(dayLabel(dayOf(ev)))}</span>` : ''].join('');
   return `<div class="lrow ${st}" data-open="${esc(ev.id)}"><div class="lti">${top}<span>${fmtTime(ev.commence_time)}</span>${rowStatus(ev)}</div>
-    <div class="lteams">${ord(ev, 'away', 'home').map(team).join('')}${odds}</div>
+    <div class="lteams"><div class="lpair">${ord(ev, 'away', 'home').map(team).join('')}${draw}</div>${odds}</div>
     <button class="lstar ${favs.has(ev.id) ? 'on' : ''}" data-mfav="${esc(ev.id)}" aria-label="Favorito">${favs.has(ev.id) ? '★' : '☆'}</button></div>`;
 }
 const CHEV = '<svg viewBox="0 0 24 24"><path d="M6 15l6-6 6 6"/></svg>';
@@ -530,7 +535,7 @@ function viewHoy() {
       <label class="ltog">Cuotas <button class="tog ${LV.odds ? 'on' : ''}" data-lodds="1" aria-label="Mostrar cuotas"><i></i></button></label></div>`}
     ${night ? `<div class="lnight mut tiny">${esc(cap(night))} · hora Lima</div>` : ''}${filt}
     ${body}</div>`;
-  return `<div class="lv"><div>${left}</div><aside class="lvside">${featPanel(favs)}</aside></div>`;
+  return `<div class="lv"><div class="lvleft">${left}</div><aside class="lvside">${featPanel(favs)}</aside></div>`;
 }
 
 // Destacados: en vivo primero, luego las competiciones más importantes, partidos parejos y los más cercanos
@@ -573,7 +578,50 @@ function featPanel(favs) {
   const more = list.filter((_, j) => j !== i).slice(0, 6);
   return `${featCard(list[i])}
     <div class="fnav"><button data-feat="-1">‹ Anterior</button><div class="dots">${dots}</div><button data-feat="1">Siguiente ›</button></div>
-    ${more.length ? `<div class="card hl"><h4>PARTIDOS DESTACADOS</h4>${more.map((a) => lvRow(a, favs, { league: true, day: true })).join('')}</div>` : ''}`;
+    ${more.length ? `<div class="card hl"><h4>PARTIDOS DESTACADOS</h4>${more.map((a) => lvRow(a, favs, { league: true, day: true })).join('')}</div>` : ''}
+    ${topPerformersCard()}`;
+}
+// Mejores actuaciones individuales del día elegido (partidos en vivo o terminados)
+function topPerformers() {
+  const k = S.calDay || todayKey(), out = []; let loading = 0;
+  const games = S.analysis.filter((a) => dayOf(a.ev) === k && a.ev.state !== 'pre' && fcVisible(a));
+  for (const { ev } of games) {
+    if (homeFirst(ev)) {
+      const sum = need('sum', ev.id, sumUrl(ev.path, ev.id)); if (sum === undefined) { loading++; continue; }
+      for (const t of sum?.rosters || []) {
+        const side = t.homeAway === 'home' ? 'home' : 'away';
+        for (const r of t.roster || []) {
+          const v = Object.fromEntries((r.stats || []).map((s) => [s.name, +s.value || 0]));
+          const g = v.totalGoals || 0, as = v.goalAssists || 0, sot = v.shotsOnTarget || 0, sv = v.saves || 0;
+          const score = g * 4 + as * 3 + sot * 0.7 + sv * 0.5;
+          if (score < 2.5) continue;
+          const parts = [g ? `${g} gol${g > 1 ? 'es' : ''}` : '', as ? `${as} asist.` : '', sot ? `${sot} a puerta` : '', sv >= 3 ? `${sv} atajadas` : ''].filter(Boolean);
+          out.push({ ev, side, pid: r.athlete?.id, name: r.athlete?.displayName, line: parts.join(' · '), score, stat: g ? 'SG' : as ? 'SAST' : sv >= 3 ? 'SV' : 'SOT' });
+        }
+      }
+    } else {
+      for (const l of ev.leaders || []) {
+        const n = (re) => +((l.line || '').match(re)?.[1] || 0);
+        let score, line;
+        if (l.cat === 'rating') { const p = n(/(\d+) PTS/), rb = n(/(\d+) REB/), as = n(/(\d+) AST/); score = p + 1.2 * rb + 1.5 * as; line = [p && `${p} pts`, rb && `${rb} reb`, as && `${as} ast`].filter(Boolean).join(' · '); }
+        else { const y = n(/(\d+) YDS/), td = n(/(\d+) TD/); score = (l.cat === 'passingYards' ? y / 25 + td * 4 : y / 10 + td * 6) * 1.6; line = `${y} yds ${l.cat === 'passingYards' ? 'de pase' : l.cat === 'rushingYards' ? 'por tierra' : 'de recepción'}${td ? ` · ${td} TD` : ''}`; }
+        out.push({ ev, side: l.side, pid: l.pid, name: l.name, line, score, stat: S.liga === 'nba' ? 'PTS' : '' });
+      }
+    }
+  }
+  return { list: out.sort((x, y) => y.score - x.score).slice(0, 8), loading, games: games.length };
+}
+function topPerformersCard() {
+  const { list, loading, games } = topPerformers();
+  const k = S.calDay || todayKey();
+  const body = list.map((x, i) => {
+    const ev = x.ev, abbr = x.side === 'home' ? ev.home_abbr : ev.away_abbr, rival = x.side === 'home' ? ev.away_abbr : ev.home_abbr;
+    const go = x.pid && x.stat !== '' ? `data-openpl="${esc(ev.id)}|${x.side}|${esc(x.pid)}|${x.stat}"` : `data-open="${esc(ev.id)}"`;
+    return `<div class="tp" ${go}><span class="tpn">${i + 1}</span>${logoImg(teamLogo(ev, x.side))}<div><b>${esc(x.name)}</b><span class="mut tiny">${esc(abbr)} vs ${esc(rival)}${ev.state === 'in' ? ' · <span class="livec">en vivo</span>' : ''}</span></div><span class="tpl">${esc(x.line)}</span></div>`;
+  }).join('');
+  const empty = !games ? `Aún no hay partidos jugados ${k === todayKey() ? 'hoy' : 'este día'}.` : loading ? 'Cargando estadísticas de los partidos…' : 'Sin actuaciones destacadas todavía.';
+  return `<div class="card hl"><h4>MEJORES ACTUACIONES · ${esc(dayLabel(k).toUpperCase())}</h4>${body || `<p class="lempty mut">${empty}</p>`}
+    ${body ? '<p class="mut tiny tpfoot">Toca un jugador para ver su perfil y agregar sus mercados al boleto.</p>' : ''}</div>`;
 }
 // Picks: solo los que pasan las reglas de cada modelo (10 pp, umbrales, cuota mínima)
 const SIDE_LABEL = (ev, m, side, lines) => {
@@ -816,7 +864,7 @@ const peek = (bucket, key) => { const c = D[bucket][key]; return c && !(c.v inst
 // Cuando llegan datos nuevos se vuelve a pintar, agrupando las llegadas (props carga cientos de jugadores)
 let rrTimer = null;
 const rerenderDetail = () => {
-  if (!(S.detail || S.tab === 'boleto' || S.tab === 'props' || S.tab === 'perfil')) return;
+  if (!(S.detail || S.tab === 'boleto' || S.tab === 'props' || S.tab === 'perfil' || S.tab === 'hoy')) return;
   if (document.activeElement?.matches?.('input, select')) return; // no interrumpir mientras escribes
   clearTimeout(rrTimer); rrTimer = setTimeout(render, 350);
 };
@@ -2279,12 +2327,36 @@ function goalsCard(ev) {
       ${mrow(gItem(ev, 'httotals', 'over', M.htGoals), 'Más de ' + fmtL(M.htGoals))}${mrow(gItem(ev, 'httotals', 'under', M.htGoals), 'Menos de ' + fmtL(M.htGoals))}</div>${teamHt}` : ''}</div>`;
 }
 // Fútbol · pestaña Estadísticas: córners primero y luego el resto de mercados de estadísticas
+// Estadísticas reales del partido (en vivo o finalizado), equipo contra equipo
+const MSTATS = [['possessionPct', 'Posesión', '%'], ['totalShots', 'Tiros'], ['shotsOnTarget', 'Tiros a puerta'], ['blockedShots', 'Tiros bloqueados'],
+  ['wonCorners', 'Córners'], ['offsides', 'Fueras de juego'], ['foulsCommitted', 'Faltas'], ['yellowCards', 'Amarillas'], ['redCards', 'Rojas'],
+  ['saves', 'Atajadas'], ['totalPasses', 'Pases'], ['passPct', 'Precisión de pase', 'x100'], ['totalCrosses', 'Centros'],
+  ['totalTackles', 'Entradas'], ['interceptions', 'Intercepciones'], ['totalClearance', 'Despejes']];
+function matchStatsCard(ev) {
+  if (ev.state === 'pre') return '';
+  const sum = liveSum({ eventId: ev.id, path: ev.path });
+  const head = `<div class="ihead"><h4>ESTADÍSTICAS DEL PARTIDO</h4>${ev.state === 'in' ? `<span class="tag live">EN VIVO · ${esc(liveClock(ev))}</span>` : '<span class="mut tiny">Final</span>'}</div>`;
+  if (!sum) return `<div class="card">${head}<p class="mut tiny">Cargando estadísticas…</p></div>`;
+  const teams = sum.boxscore?.teams || [];
+  const of = (s) => { const t = teams.find((x) => String(x.team?.id) === String(s === 'home' ? ev.home_id : ev.away_id)); return Object.fromEntries((t?.statistics || []).map((x) => [x.name, parseFloat(x.displayValue)])); };
+  const H = of('home'), A = of('away'), [s1, s2] = ord(ev, 'away', 'home'), V = { home: H, away: A };
+  const rows = MSTATS.filter(([k]) => isFinite(H[k]) && isFinite(A[k])).map(([k, lab, u]) => {
+    const a = V[s1][k], b = V[s2][k], tot = a + b, f = (v) => (u === 'x100' ? Math.round(v * 100) + ' %' : u === '%' ? Math.round(v) + ' %' : String(Math.round(v * 10) / 10).replace('.', ','));
+    const wa = tot ? (a / tot) * 100 : 0, wb = tot ? (b / tot) * 100 : 0;
+    return `<div class="msr"><div class="msv"><b class="${a > b ? 'acc' : ''}">${f(a)}</b><span>${esc(lab)}</span><b class="${b > a ? 'acc' : ''}">${f(b)}</b></div>
+      <div class="msb"><span><i style="width:${wa}%" class="${a > b ? 'on' : ''}"></i></span><span><i style="width:${wb}%" class="${b > a ? 'on' : ''}"></i></span></div></div>`;
+  }).join('');
+  const lab = (s) => `<span class="msteam">${logoImg(teamLogo(ev, s))}${esc(s === 'home' ? ev.home_abbr : ev.away_abbr)}</span>`;
+  return `<div class="card">${head}${rows ? `<div class="msteams">${lab(s1)}${lab(s2)}</div>${rows}` : '<p class="mut tiny">ESPN aún no publica estadísticas de este partido.</p>'}
+    <p class="mut tiny">Datos de ESPN${ev.state === 'in' ? ', se actualizan cada 10 s' : ''}.</p></div>`;
+}
 function statsTab(a) {
   const ev = a.ev;
   if (isGuest()) return lockCard('Córners, tarjetas, tiros y más estadísticas del partido');
+  const real = matchStatsCard(ev);
   const sm = statModel(ev);
-  if (sm === undefined) return goalsCard(ev) + `<div class="card empty">Cargando estadísticas de los últimos partidos…</div>`;
-  if (!sm) return goalsCard(ev) + `<div class="card empty">Estadísticas no disponibles para este partido.</div>`;
+  if (sm === undefined) return real + goalsCard(ev) + `<div class="card empty">Cargando estadísticas de los últimos partidos…</div>`;
+  if (!sm) return real + goalsCard(ev) + `<div class="card empty">Estadísticas no disponibles para este partido.</div>`;
   const M = mstate();
   const rowsFor = (sname, team) => {
     const lam = statLambda(sm, sname, team); if (lam == null) return '';
@@ -2305,7 +2377,7 @@ function statsTab(a) {
     <tr class="mut tiny"><td></td><td>a favor</td><td>en contra</td><td>a favor</td><td>en contra</td></tr>
     ${Object.entries(TSTAT).map(([k, d]) => `<tr><td>${esc(d.label)}</td><td><b>${fmtS(T1[1].for[k], k)}</b></td><td>${fmtS(T1[1].against[k], k)}</td><td><b>${fmtS(T2[1].for[k], k)}</b></td><td>${fmtS(T2[1].against[k], k)}</td></tr>`).join('')}</table></div>
     <p class="mut tiny">Últimos ${sm.H.n} partidos de ${esc(ev.home_abbr)} y ${sm.A.n} de ${esc(ev.away_abbr)} en esta competición (ESPN).</p></div>`;
-  return `${sm.loading ? `<p class="mut tiny">Cargando ${sm.loading} partidos…</p>` : ''}${goalsCard(ev)}${cornersCard}${others}${table}
+  return `${real}${sm.loading ? `<p class="mut tiny">Cargando ${sm.loading} partidos…</p>` : ''}${goalsCard(ev)}${cornersCard}${others}${table}
     <p class="mut tiny">Esperado = media entre lo que hace cada equipo y lo que le hacen a su rival. Probabilidad con Poisson; la línea se mueve con − / +. Antes del partido; en directo no se recalcula.</p>`;
 }
 
@@ -2609,6 +2681,9 @@ async function fetchEspn() {
       path, league_logo: lgLogo, home_id: String(home.team.id), away_id: String(away.team.id),
       // la final de la Libertadores es a partido único en sede neutral (ESPN no siempre lo marca)
       neutral: !!c.neutralSite || e.season?.slug === 'final', stage: e.season?.slug || '',
+      // líderes del partido (NBA/NFL); antes de empezar ESPN pone promedios de temporada, por eso solo en vivo o final
+      leaders: e.status.type.state === 'pre' ? [] : c.competitors.flatMap((cp) => (cp.leaders || []).filter((l) => ['rating', 'passingYards', 'rushingYards', 'receivingYards'].includes(l.name))
+        .map((l) => ({ cat: l.name, side: cp.homeAway, line: l.leaders?.[0]?.displayValue, name: l.leaders?.[0]?.athlete?.displayName, pid: l.leaders?.[0]?.athlete?.id }))),
       home_abbr: home.team.abbreviation || H.slice(0, 3).toUpperCase(), away_abbr: away.team.abbreviation || A.slice(0, 3).toUpperCase(),
       home_rec: recs(home), away_rec: recs(away),
       total: lines.total ?? null, lines,
