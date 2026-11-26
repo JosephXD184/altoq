@@ -1,5 +1,5 @@
 // ALTOQ · login con Google (Firebase), cuotas en tiempo real (The Odds API) y detector de valor (EV+).
-import { modelFor, pendingReason, summaryFor, logPrediction, settleResults, registryStats } from './model.js?v=19';
+import { modelFor, pendingReason, summaryFor, logPrediction, settleResults, registryStats } from './model.js?v=20';
 const CFG = window.RUSHTOP_CONFIG || {};
 const TZ = 'America/Lima';
 const $ = (s) => document.querySelector(s);
@@ -487,8 +487,9 @@ function lvRow(a, favs, opt = {}) {
   // Rejilla de 2 filas: escudo · nombre · probabilidades · marcador. Las probabilidades van en una sola columna
   // que ocupa las dos filas, en el mismo orden que los equipos: arriba el de arriba, X (empate) al medio, abajo el de abajo
   const team = (s, i) => `<div class="lt ${won && won !== s ? 'lose' : ''} ${won === s ? 'win' : ''}" style="--r:${i + 1}">${logoImg(teamLogo(ev, s))}<span class="ln">${esc(teamName(ev, s))}</span><b class="ls">${sc(s)}</b></div>`;
-  const [t1, t2] = ord(ev, 'away', 'home'), pv = (s) => (p?.[s] != null ? pctEs(p[s]) : '–');
-  const draw = st !== 'post' && p ? `<span class="lps"><span>${pv(t1)}</span>${p.draw != null ? `<span class="lpx"><i>X</i> ${pv('draw')}</span>` : ''}<span>${pv(t2)}</span></span>` : '';
+  // cada probabilidad con su letra: L (local), X (empate), V (visitante)
+  const [t1, t2] = ord(ev, 'away', 'home'), pv = (s) => `<span class="lpx"><i>${s === 'home' ? 'L' : s === 'away' ? 'V' : 'X'}</i> ${p?.[s] != null ? pctEs(p[s]) : '–'}</span>`;
+  const draw = st !== 'post' && p ? `<span class="lps">${pv(t1)}${p.draw != null ? pv('draw') : ''}${pv(t2)}</span>` : '';
   const oddsDef = homeFirst(ev) ? [['1', L.mlHome], ['X', L.mlDraw], ['2', L.mlAway]] : [[ev.away_abbr, L.mlAway], [ev.home_abbr, L.mlHome]];
   const odds = S.lv.odds && st !== 'post' ? `<div class="lodds">${oddsDef.map(([k, v]) => `<span><i>${esc(k)}</i>${v ? fmtOdd(v) : '–'}</span>`).join('')}</div>` : '';
   const top = [opt.league ? `<span class="ltag2">${esc(LG_META[ev.sport_key]?.[0] || '')}</span>` : '', opt.day ? `<span>${esc(dayLabel(dayOf(ev)))}</span>` : ''].join('');

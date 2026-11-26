@@ -471,7 +471,7 @@ i.lglogo{border-radius:50%;background:var(--surf2)}
 .lt>*{grid-row:var(--r)}
 .lt>img,.lt>.nologo{grid-column:1}.lt>.ln{grid-column:2}.lt>.lp{grid-column:4;text-align:right}.lt>.ls{grid-column:5}
 .lps{grid-column:4;grid-row:1/3;align-self:stretch;display:flex;flex-direction:column;justify-content:space-between;align-items:flex-end;font-size:11px;font-weight:700;color:var(--mut);line-height:1.2;min-width:44px}
-.lpx{color:var(--ink);background:var(--surf2);border-radius:99px;padding:0 6px}
+.lpx{color:var(--ink);background:var(--surf2);border-radius:99px;padding:0 6px;white-space:nowrap}
 .lpx i{font-style:normal;font-weight:800;color:var(--acc)}
 .lt img,.lt .nologo{width:20px;height:20px;object-fit:contain;border-radius:50%}
 .lt .nologo{background:var(--surf2)}
