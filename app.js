@@ -1,5 +1,5 @@
 // ALTOQ · login con Google (Firebase), cuotas en tiempo real (The Odds API) y detector de valor (EV+).
-import { modelFor, pendingReason, summaryFor, logPrediction, preLogged, settleResults, registryStats } from './model.js?v=25';
+import { modelFor, pendingReason, summaryFor, logPrediction, preLogged, settleResults, registryStats } from './model.js?v=26';
 const CFG = window.RUSHTOP_CONFIG || {};
 const TZ = 'America/Lima';
 const $ = (s) => document.querySelector(s);
@@ -2463,6 +2463,9 @@ function matchStatsCard(ev) {
 // ---------- NBA/NFL dentro del partido: ventaja minuto a minuto, cuartos y mejor jugador de cada equipo ----------
 const hexLum = (h) => (h && /^[0-9a-f]{6}$/i.test(h) ? [0, 2, 4].reduce((s, i) => s + parseInt(h.slice(i, i + 2), 16), 0) : 0);
 const teamCol = (t, alt) => { const c = [t?.color, t?.alternateColor].find((x) => hexLum(x) > 150); return c ? '#' + c : alt; };
+const EARLY = 20; // ventaja que activa el pago anticipado (NBA)
+// minuto de juego → "C3 5:23"
+const gameClock = (t) => { const reg = t < 48, per = reg ? Math.min(4, Math.floor(t / 12) + 1) : 5 + Math.floor((t - 48) / 5), left = reg ? per * 12 - t : 48 + (per - 4) * 5 - t; const s = Math.round(left * 60); return `${per <= 4 ? 'C' + per : 'P' + (per - 4)} ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
 function leadChart(sum, ev, sTop, cols) {
   const comp = sum.header?.competitions?.[0], st = comp?.status || {};
   const pts = [[0, 0]];
@@ -2482,13 +2485,17 @@ function leadChart(sum, ev, sTop, cols) {
   d += ` L${x(tNow).toFixed(1)},${y(0)} Z`;
   const marks = []; for (let t = 12; t < tMax; t += t < 48 ? 12 : 5) marks.push(t);
   const id = 'lc' + ev.id;
-  return `<div class="leadw"><svg class="leadc" viewBox="0 0 ${W} ${Hh}" preserveAspectRatio="none" role="img" aria-label="Ventaja en el marcador">
+  // Pago anticipado: primer momento en que cada equipo llega a +20
+  const early = [];
+  for (const sg of [1, -1]) { const h = pts.find((p) => p[1] * sg >= EARLY); if (h) early.push({ t: h[0], v: h[1], side: sg > 0 ? sTop : sTop === 'home' ? 'away' : 'home' }); }
+  return `<div class="leadw"><div class="leadbox"><svg class="leadc" viewBox="0 0 ${W} ${Hh}" preserveAspectRatio="none" role="img" aria-label="Ventaja en el marcador">
     <defs><clipPath id="${id}a"><rect x="0" y="0" width="${W}" height="${Hh / 2}"/></clipPath><clipPath id="${id}b"><rect x="0" y="${Hh / 2}" width="${W}" height="${Hh / 2}"/></clipPath></defs>
     <rect x="0" y="0" width="${W - pr}" height="${Hh / 2}" fill="${cols[0]}" opacity=".13"/><rect x="0" y="${Hh / 2}" width="${W - pr}" height="${Hh / 2}" fill="${cols[1]}" opacity=".13"/>
     <path d="${d}" fill="${cols[0]}" clip-path="url(#${id}a)"/><path d="${d}" fill="${cols[1]}" clip-path="url(#${id}b)"/>
     ${marks.map((t) => `<line x1="${x(t)}" x2="${x(t)}" y1="0" y2="${Hh}" class="cg"/>`).join('')}
-    <line x1="0" x2="${W - pr}" y1="${y(0)}" y2="${y(0)}" class="ca"/>
-    </svg><div class="leady"><span>${m}</span><span>0</span><span>${m}</span></div></div>`;
+    <line x1="0" x2="${W - pr}" y1="${y(0)}" y2="${y(0)}" class="ca"/>${m >= EARLY ? [EARLY, -EARLY].map((v) => `<line x1="0" x2="${W}" y1="${y(v)}" y2="${y(v)}" class="cbar"/>`).join('') : ''}
+    </svg>${early.map((h) => `<i class="eadot" style="left:${(x(h.t) / W) * 100}%;top:${(y(h.v) / Hh) * 100}%" title="Pago anticipado"></i>`).join('')}</div><div class="leady"><span>${m}</span><span>0</span><span>${m}</span></div></div>
+    ${early.map((h) => `<div class="eanote"><i></i><span><b>Pago anticipado: ${esc(h.side === 'home' ? ev.home_abbr : ev.away_abbr)}</b> llegó a +${EARLY} en el ${esc(gameClock(h.t))}. En casas con pago anticipado, la apuesta a ganador de ${esc(h.side === 'home' ? ev.home_abbr : ev.away_abbr)} se cobra aunque luego pierda.</span></div>`).join('')}`;
 }
 function courtCard(ev) {
   if (ev.state === 'pre' || isSoccerEv(ev) || !ev.path) return '';
