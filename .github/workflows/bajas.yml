@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: bajas
+  group: data-branch
   cancel-in-progress: false
 
 jobs:

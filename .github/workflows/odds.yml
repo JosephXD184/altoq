@@ -1,0 +1,45 @@
+name: Cuotas de referencia (The Odds API)
+
+on:
+  schedule:
+    - cron: '7 13 * * *'   # una vez al día, 8:07 a. m. de Lima (plan gratis: 500 créditos/mes)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: data-branch
+  cancel-in-progress: false
+
+jobs:
+  odds:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Traer la rama de datos
+        run: |
+          git fetch origin data || true
+          if git rev-parse --verify -q origin/data >/dev/null; then
+            git worktree add data origin/data
+          else
+            git worktree add --detach data && (cd data && git checkout --orphan data && git rm -rf -q . || true)
+          fi
+          mkdir -p data/odds
+      - name: Pedir cuotas
+        env:
+          ODDSAPI_KEY: ${{ secrets.ODDSAPI_KEY }}
+        run: node scripts/odds.mjs data/odds
+      - name: Guardar
+        if: always()
+        run: |
+          cd data
+          git config user.name "altoq-bot"
+          git config user.email "altoq-bot@users.noreply.github.com"
+          git add -A odds
+          git diff --cached --quiet && exit 0
+          git commit -q -m "Cuotas $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push origin HEAD:data

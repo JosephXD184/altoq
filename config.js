@@ -20,6 +20,9 @@ window.RUSHTOP_CONFIG = {
   // Bajas de fútbol: archivos que descarga cada 2 h la tarea de GitHub (API-Football). Vacío = Sofascore, solo en local.
   bajasData: "https://raw.githubusercontent.com/JosephXD184/altoq/data/bajas",
 
+  // Cuotas de Betano y casas de Reino Unido: archivo que descarga una vez al día la tarea de GitHub (The Odds API)
+  oddsData: "https://raw.githubusercontent.com/JosephXD184/altoq/data/odds/latest.json",
+
   // Regiones de casas de apuestas: us, us2, uk, eu, au (cada región cuenta como una petición extra)
   regions: "eu,us",
 

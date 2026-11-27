@@ -1,5 +1,5 @@
 // ALTOQ · login con Google (Firebase), cuotas en tiempo real (The Odds API) y detector de valor (EV+).
-import { modelFor, pendingReason, summaryFor, logPrediction, preLogged, settleResults, registryStats } from './model.js?v=26';
+import { modelFor, pendingReason, summaryFor, logPrediction, preLogged, settleResults, registryStats } from './model.js?v=27';
 const CFG = window.RUSHTOP_CONFIG || {};
 const TZ = 'America/Lima';
 const $ = (s) => document.querySelector(s);
@@ -1007,28 +1007,46 @@ function bookOdds(j) {
     return r;
   }).filter((r) => r.home || r.away);
 }
+// Cuotas de Betano y casas de Reino Unido: un archivo al día (CFG.oddsData), se pide una vez por sesión
+const XO = { t: 0, ev: null, at: 0, busy: false };
+function xoddsFor(ev) {
+  if (!CFG.oddsData) return [];
+  if (!XO.busy && Date.now() - XO.t > 30 * 6e4) {
+    XO.busy = true;
+    getJ(bust(CFG.oddsData)).then((v) => { XO.ev = v?.events || XO.ev || []; XO.at = v?.at || XO.at; XO.t = Date.now(); XO.busy = false; rerenderDetail(); });
+  }
+  const t = new Date(ev.commence_time).getTime();
+  const m = (XO.ev || []).find((x) => Math.abs(new Date(x.t).getTime() - t) < 3 * 36e5 && ((nameSim(x.home, ev.home_team) >= 0.5 && nameSim(x.away, ev.away_team) >= 0.5) || (nameSim(x.home, ev.away_team) >= 0.5 && nameSim(x.away, ev.home_team) >= 0.5)));
+  if (!m) return [];
+  const flip = !(nameSim(m.home, ev.home_team) >= 0.5); // en sede neutral pueden venir al revés
+  return m.books.map((b) => ({ k: b.k, name: b.n, home: flip ? b.away : b.home, away: flip ? b.home : b.away, draw: b.draw, line: null, over: null, under: null }));
+}
 function booksCard(ev) {
   if (!ev.path) return '';
   const [sp, lg] = ev.path.split('/');
   const j = need('xodds', ev.id, `https://sports.core.api.espn.com/v2/sports/${sp}/leagues/${lg}/events/${ev.id}/competitions/${ev.id}/odds?limit=50`);
   if (j === undefined) return `<div class="card"><h4>CUOTAS DE LAS CASAS</h4><p class="mut tiny">Cargando cuotas…</p></div>`;
-  const rows = bookOdds(j); if (!rows.length) return '';
+  const uk = xoddsFor(ev); // Betano y casas de Reino Unido (tarea diaria de GitHub)
+  const espn = bookOdds(j), betano = uk.filter((b) => /betano/i.test(b.k)), others = uk.filter((b) => !/betano/i.test(b.k));
+  const rows = [...betano, ...espn, ...others]; if (!rows.length) return '';
+  const nShow = betano.length + espn.length || 3, allBk = S.detail.allBk, shown = allBk ? rows : rows.slice(0, Math.max(nShow, 3));
   const pr = ev.pred, soccer = isSoccerEv(ev);
   const pm = { home: pr?.pHome, away: pr?.pAway, draw: pr?.pDraw };
   const [s1, s2] = ord(ev, 'away', 'home');
   const cols = [[s1, ev[s1 + '_abbr'] || (s1 === 'home' ? '1' : '2')], ...(soccer ? [['draw', 'X']] : []), [s2, ev[s2 + '_abbr']]];
   const lines = [...new Set(rows.map((r) => r.line).filter((v) => v != null))];
   const tot = lines.length === 1 ? lines[0] : null; // más/menos solo si todas las casas usan la misma línea
-  const best = Object.fromEntries([...cols.map(([k]) => k), 'over', 'under'].map((k) => [k, Math.max(...rows.map((r) => r[k] || 0))]));
+  const best = Object.fromEntries([...cols.map(([k]) => k), 'over', 'under'].map((k) => [k, Math.max(...shown.map((r) => r[k] || 0))]));
   const cell = (r, k) => {
     const v = r[k]; if (!v) return '<td class="mut">–</td>';
     const val = pm[k] != null && pm[k] * v > 1.02; // la cuota paga más de lo que el modelo cree justo
-    return `<td class="${v === best[k] && rows.length > 1 ? 'bk' : ''} ${val ? 'val' : ''}">${fmtOdd(v)}</td>`;
+    return `<td class="${v === best[k] && shown.length > 1 ? 'bk' : ''} ${val ? 'val' : ''}">${fmtOdd(v)}</td>`;
   };
   const fair = pr ? `<tr class="fair"><td>Cuota justa ALTOQ</td>${cols.map(([k]) => `<td>${pm[k] ? fmtOdd(1 / pm[k]) : '–'}</td>`).join('')}${tot != null ? '<td>–</td><td>–</td>' : ''}</tr>` : '';
   return `<div class="card"><h4>CUOTAS DE LAS CASAS</h4><div class="scroll"><table class="mtable bkt"><tr><th></th>${cols.map(([, l]) => `<th>${esc(l)}</th>`).join('')}${tot != null ? `<th>Más ${fmtL(tot)}</th><th>Menos ${fmtL(tot)}</th>` : ''}</tr>
-    ${rows.map((r) => `<tr><td><b>${esc(r.name)}</b></td>${cols.map(([k]) => cell(r, k)).join('')}${tot != null ? cell(r, 'over') + cell(r, 'under') : ''}</tr>`).join('')}${fair}</table></div>
-    <p class="mut tiny">${rows.length > 1 ? 'Naranja: la mejor cuota entre las casas. ' : ''}Verde: la cuota paga más que la cuota justa del modelo (posible valor). Cuotas de las casas que publica ESPN para este partido${ev.state !== 'pre' ? ' (las de cierre)' : ''}.</p></div>`;
+    ${shown.map((r) => `<tr><td><b>${esc(r.name)}</b></td>${cols.map(([k]) => cell(r, k)).join('')}${tot != null ? cell(r, 'over') + cell(r, 'under') : ''}</tr>`).join('')}${fair}</table></div>
+    ${rows.length > shown.length || allBk ? `<button class="linkbtn" data-allbk="1">${allBk ? 'Ver menos casas' : `Ver ${rows.length - shown.length} casas más`}</button>` : ''}
+    <p class="mut tiny">${rows.length > 1 ? 'Naranja: la mejor cuota de las casas que ves. ' : ''}Verde: la cuota paga más que la cuota justa del modelo (posible valor). DraftKings y Bet365: ESPN${ev.state !== 'pre' ? ' (cuotas de cierre)' : ''}.${uk.length ? ` Betano y las demás: casas de Reino Unido (The Odds API), actualizadas una vez al día (${esc(XO.at ? new Date(XO.at).toLocaleString('es-PE', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: TZ }) : '')}); en Betano Perú la cuota puede ser algo distinta.` : ''}</p></div>`;
 }
 function partidoTab(a, ai, liveEv) {
   const ev = a.ev, live = liveEv ? liveProbCard(liveEv) : '';
@@ -2882,6 +2900,7 @@ document.addEventListener('click', (e) => {
   if (t.dataset.fcf) { S.fc = t.dataset.fcf; store.set('fc', S.fc); return render(); }
   if (t.dataset.dteam) { S.detail.team = t.dataset.dteam; return render(); }
   if (t.dataset.cq != null) { S.detail.q = +t.dataset.cq; return render(); }
+  if (t.dataset.allbk) { S.detail.allBk = !S.detail.allBk; return render(); }
   if (t.dataset.bx) { S.detail.bx = t.dataset.bx; return render(); }
   if (t.dataset.bxs) { S.detail.bxs = t.dataset.bxs; return render(); }
   // Props
