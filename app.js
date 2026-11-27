@@ -1,5 +1,5 @@
 // ALTOQ · login con Google (Firebase), cuotas en tiempo real (The Odds API) y detector de valor (EV+).
-import { modelFor, pendingReason, summaryFor, logPrediction, preLogged, settleResults, registryStats } from './model.js?v=31';
+import { modelFor, pendingReason, summaryFor, logPrediction, preLogged, settleResults, registryStats } from './model.js?v=32';
 const CFG = window.RUSHTOP_CONFIG || {};
 const TZ = 'America/Lima';
 const $ = (s) => document.querySelector(s);
@@ -1435,7 +1435,10 @@ function probOver(pr, line) {
 const fmtL = (x) => String(x).replace('.', ',');
 // Fútbol: las líneas de jugador van en enteros. Por dentro siguen en ,5 (más de 2,5) pero se muestran "3 o más" / "Menos de 3"
 const halfL = (v) => Math.max(0.5, Math.floor(v) + 0.5);
-const propTxt = (soccer, pick, line) => (soccer ? (pick === 'under' ? `Menos de ${line + 0.5}` : `${line + 0.5} o más`) : `${pick === 'under' ? 'Menos' : 'Más'} de ${num1(line)}`);
+// Las líneas de jugador van en enteros en todos los deportes: por dentro siguen en ,5 (más de 25,5) pero se muestran
+// "26 o más" / "Menos de 26". Las apuestas viejas con línea entera se muestran como antes
+const propTxt = (_s, pick, line) => (Number.isInteger(+line) ? `${pick === 'under' ? 'Menos' : 'Más'} de ${fmtL(line)}` : pick === 'under' ? `Menos de ${+line + 0.5}` : `${+line + 0.5} o más`);
+const tgtL = (line) => (Number.isInteger(+line) ? fmtL(line) : String(Math.ceil(+line))); // número a alcanzar
 const rateAt = (arr, line, side) => (arr.length ? arr.filter((v) => (side === 'under' ? v < line : v > line)).length / arr.length : null);
 const rateCls = (r) => (r == null ? '' : r >= 0.6 ? 'good' : r <= 0.4 ? 'bad' : 'warn');
 
@@ -1461,7 +1464,7 @@ function playersTab(a, side) {
     const g = playerGames(ev.path, p.id); if (!g || g.length < 3) return null;
     if (mean(g.map((x) => x.min)) < 12) return null;
     const pr = projectPlayer(g, stat, oppId, side === 'home', dt);
-    const line = S.detail.lines?.[p.id + '|' + stat] ?? suggestLine(pr.proj);
+    const line = halfL(S.detail.lines?.[p.id + '|' + stat] ?? suggestLine(pr.proj));
     const h2h = g.filter((x) => String(x.oppId) === String(oppId)).map((x) => STATS[stat].f(x));
     const vals = pr.vals;
     return { p, pr, line, prob: probOver(pr, line), last: vals.slice(-10), season: rateAt(vals, line), h2h: rateAt(h2h, line), l5: rateAt(vals.slice(-5), line), l10: rateAt(vals.slice(-10), line), l20: rateAt(vals.slice(-20), line), inj: injured.get(String(p.id)) };
@@ -1472,7 +1475,7 @@ function playersTab(a, side) {
     return `<div class="card pcard click" data-pl="${esc(side)}/${esc(r.p.id)}">
     <div class="phead"><div class="ph">${face(ev.path, r.p, r.p.id)}${logo ? `<img class="tl" src="${esc(logo)}" alt="">` : ''}</div>
       <div><b>${esc(r.p.displayName)}</b> <span class="mut tiny">${esc(abbr)} · ${esc(posEs(r.p))}</span>${r.inj ? ` <span class="chip ${r.inj === 'Baja' ? 'bad' : 'warn'}">${esc(r.inj)}</span>` : ''}
-        <div><span class="acc">Más</span> ${fmtL(r.line)} ${STATS[stat].label} <span class="mut tiny">· proyección ${num1(r.pr.proj)}</span></div></div>
+        <div><span class="acc">${r.line + 0.5} o más</span> ${STATS[stat].label.toLowerCase()} <span class="mut tiny">· proyección ${num1(r.pr.proj)}</span></div></div>
       <div class="pq"><span class="mut tiny">PROB. MÁS</span><b class="${rateCls(r.prob.over)}">${pctEs(r.prob.over)}</b></div><div class="pq"><span class="mut tiny">CUOTA JUSTA</span><b>${fmtOdd(1 / r.prob.over)}</b></div></div>
     <div class="rates">
       <div><span>Temporada</span><b class="${rateCls(r.season)}">${pctEs(r.season)}</b></div>
@@ -1599,7 +1602,7 @@ function playerCtx() {
   const pr = g && g.length ? projectPlayer(g, stat, oppId, side === 'home', dt) : null;
   const key = pid + '|' + stat;
   const sugg = pr ? suggestLine(pr.proj) : null;
-  const line0 = S.detail.lines?.[key] ?? sugg, line = soccer && line0 != null ? halfL(line0) : line0;
+  const line0 = S.detail.lines?.[key] ?? sugg, line = line0 != null ? halfL(line0) : line0;
   const pick = S.detail.pick ||= 'over';
   return { a, ai, ev, side, pid, teamId, oppId, roster, p, g, stat, dt, pr, key, sugg, line, pick, soccer, keys };
 }
@@ -1654,12 +1657,12 @@ function playerProfile() {
   const controls = `<div class="card pctl">
     <div class="ctlrow">
       <div class="seg side"><button data-pick="over" class="${pick === 'over' ? 'on' : ''}">Más de</button><button data-pick="under" class="${pick === 'under' ? 'on' : ''}">Menos de</button></div>
-      <div class="stepper"><button data-line="${soccer ? -1 : -0.5}">−</button><input id="lineIn" type="number" step="${soccer ? 1 : 0.5}" min="${soccer ? 1 : 0}" value="${soccer ? line + 0.5 : line}"><button data-line="${soccer ? 1 : 0.5}">+</button></div>
+      <div class="stepper"><button data-line="-1">−</button><input id="lineIn" type="number" step="1" min="1" value="${line + 0.5}"><button data-line="1">+</button></div>
       <label class="oddin"><span class="mut">Cuota</span><input id="priceIn" type="number" step="0.01" min="1.01" placeholder="—" value="${price || ''}"></label>
     </div>
     <div class="pickrow">
       <div><h3 class="pickh">${propTxt(soccer, pick, line)} <small>${esc(lab)}</small></h3>
-        <p class="mut">Proyección ALTOQ para hoy: <b style="color:var(--ink)">${num1(pr.proj)}</b>${line !== sugg ? ` · <button class="linkbtn" data-line="reset">Usar la línea sugerida (${soccer ? propTxt(true, pick, sugg) : fmtL(sugg)})</button>` : ' · línea sugerida'}</p></div>
+        <p class="mut">Proyección ALTOQ para hoy: <b style="color:var(--ink)">${num1(pr.proj)}</b>${line !== sugg ? ` · <button class="linkbtn" data-line="reset">Usar la línea sugerida (${propTxt(true, pick, sugg)})</button>` : ' · línea sugerida'}</p></div>
       <button class="btn ${added ? 'ghost' : 'google'} addprop" data-act="propadd">${added ? '✓ En boleto · quitar' : '+ Boleto'}</button>
     </div>
     <div class="pnums">
@@ -1674,9 +1677,9 @@ function playerProfile() {
     <div class="bchart" style="height:${H + 60}px">
       <div class="yax"><span style="bottom:${H + 34}px">${Math.round(maxV / 1.12)}</span><span style="bottom:34px">0</span></div>
       <div class="bars">${tramo.map((x) => { const v = f(x), d = new Date(x.date); return `<div class="bc" title="${esc((x.home ? 'vs ' : '@ ') + x.opp)} · ${x.min} min${x.b2b ? ' · B2B' : ''}"><span style="bottom:${(v / maxV) * H + 36}px">${v}</span><i class="${hit(x) ? 'win' : 'loss'}" style="height:${(v / maxV) * H}px"></i><small>${d.getDate()}/${d.getMonth() + 1}<br><b>${x.home ? '' : '@'}${esc(x.opp)}</b></small></div>`; }).join('') || '<p class="mut" style="padding:40px">Sin partidos con estos filtros.</p>'}
-        <div class="lline" style="bottom:${((soccer ? line + 0.5 : line) / maxV) * H + 34}px"><b>${soccer ? line + 0.5 : num1(line)}</b></div></div>
+        <div class="lline" style="bottom:${((line + 0.5) / maxV) * H + 34}px"><b>${line + 0.5}</b></div></div>
     </div>
-    <div class="legend"><span><i class="win"></i>${soccer ? (pick === 'over' ? 'Llegó a ' + (line + 0.5) : 'Quedó bajo ' + (line + 0.5)) : (pick === 'over' ? 'Superó ' : 'Quedó bajo ') + num1(line)}</span><span><i class="loss"></i>No ${pick === 'over' ? 'llegó' : 'quedó bajo'}</span><span><i class="ln"></i>Línea</span></div>
+    <div class="legend"><span><i class="win"></i>${pick === 'over' ? 'Llegó a ' + (line + 0.5) : 'Quedó bajo ' + (line + 0.5)}</span><span><i class="loss"></i>No ${pick === 'over' ? 'llegó' : 'quedó bajo'}</span><span><i class="ln"></i>Línea</span></div>
     <p class="mut">${propTxt(soccer, pick, line)} se cumplió en <b class="acc">${hits} de ${tramo.length}</b> partidos de este tramo.</p>
   </div>`;
 
@@ -2078,7 +2081,7 @@ function trackBox(it) {
   const pctDone = Math.min(100, (cur / Math.max(it.line, 0.5)) * 100);
   return `<div class="track ${status[0]}">
     <div class="trow"><span class="chip ${status[0] === 'ok' ? 'okc' : status[0]}">${status[1]}</span>
-      <span><b>${cur}</b> ${STATS[it.stat].label.toLowerCase()} de ${fmtL(it.line)} · ${esc(L.detail)}${L.min != null ? ` · ${L.min} min` : ''}</span></div>
+      <span><b>${cur}</b> ${STATS[it.stat].label.toLowerCase()} · ${esc(propTxt(0, it.side, it.line))} · ${esc(L.detail)}${L.min != null ? ` · ${L.min} min` : ''}</span></div>
     <div class="tbar"><i style="width:${pctDone}%"></i><em style="left:${Math.min(100, (it.line / Math.max(it.line, finalProj, cur) ) * 100)}%"></em></div>
     <div class="mut tiny">${done ? 'Final.' : `Proyección final: <b>${num1(finalProj)}</b>${need != null && need > 0 ? ` · le faltan ${need}` : ''} · prob. de acertar ahora: <b>${pct1(p)}</b>${fairCash != null ? ` · cash out justo ≈ <b>${money(fairCash)}</b>` : ''}`}</div>
     ${advice ? `<div class="tiny" style="margin-top:4px">${advice}</div>` : ''}
@@ -2206,7 +2209,7 @@ function viewProps() {
       <button class="star ${r.fav ? 'on' : ''}" data-fav="${esc(r.p.id)}" title="Favorita">${r.fav ? '★' : '☆'}</button>
       <div class="ph sm">${face(r.ev.path, r.p, r.p.id)}</div>
       <div class="pinfo" data-openpl="${esc(r.ev.id)}|${r.side}|${esc(r.p.id)}|${r.stat}"><b>${esc(r.p.displayName)}</b><div class="mut tiny">${esc(r.abbr)} · ${esc(posEs(r.p))} · ${r.side === 'home' ? 'vs' : '@'} ${esc(r.oppAbbr)} · ${fmtTime(r.ev.commence_time)}</div></div>
-      <div class="pline"><span class="${r.pick === 'over' ? 'acc' : ''}">${r.pick === 'over' ? 'Más' : 'Menos'}</span> <b>${fmtL(r.line)}</b> <span class="mut">${esc(lab)}</span><div class="mut tiny">proy. ${num1(r.pr.proj)}</div></div>
+      <div class="pline"><b class="${r.pick === 'over' ? 'acc' : ''}">${propTxt(0, r.pick, r.line)}</b> <span class="mut">${esc(lab)}</span><div class="mut tiny">proy. ${num1(r.pr.proj)}</div></div>
       <div class="pmet"><span class="mut tiny">Modelo</span><b class="${rateCls(r.pm)}">${pctEs(r.pm)}</b></div>
       <div class="pmet"><span class="mut tiny">${{ l5: 'L5', l10: 'L10', l20: 'L20', season: 'Temp.' }[P.tramo]}</span><b class="${rateCls(r.hr)}">${r.hits}/${r.n}</b></div>
       <div class="pmet"><span class="mut tiny">Cuota justa</span><b class="acc">${fmtOdd(1 / r.pm)}</b></div>
@@ -2246,7 +2249,7 @@ function quickAddProp(spec) {
   let s = getSlip();
   if (s.some((x) => x.id === id)) s = s.filter((x) => x.id !== id);
   else s.push({ id, game: matchName(ev, true), time: ev.commence_time, market: 'Jugador · ' + STATS[stat].label,
-    pick: `${p?.displayName || 'Jugador'} ${pick === 'over' ? 'Más' : 'Menos'} de ${num1(line)} ${STATS[stat].label.toLowerCase()}`,
+    pick: `${p?.displayName || 'Jugador'} ${propTxt(0, pick, line)} ${STATS[stat].label.toLowerCase()}`,
     price: null, book: '', pModel: pm, path: ev.path, eventId: ev.id, pid, pname: p?.displayName, stat, line, side: pick, proj: pr.proj,
     avgMin: ev.path.startsWith('soccer') ? null : mean(g.slice(-10).map((x) => x.min)) });
   setSlip(s); render();
@@ -2994,8 +2997,8 @@ function liveLegCard(it, sum) {
     : [['MIN', L?.min], ['PTS', box.points], ['REB', box.reb], ['AST', box.ast], ['3PM', box.tpm], ['TC', box.fga != null ? `${box.fgm}-${box.fga}` : null]];
   const want = it.side === 'under' ? 'Menos' : 'Más';
   return `<div class="lcard lc-${st[0]}">
-    <div class="lch"><div class="ph">${face(it.path, null, it.pid, name)}</div><div><b>${esc(name)}</b><div class="mut">${want} de ${fmtL(it.line)} ${esc(STATS[it.stat].label)}</div></div>
-      <div class="lcv"><b class="${st[0]}">${cur}</b><span class="mut"> / ${fmtL(it.line)}</span></div></div>
+    <div class="lch"><div class="ph">${face(it.path, null, it.pid, name)}</div><div><b>${esc(name)}</b><div class="mut">${esc(propTxt(0, it.side, it.line))} ${esc(STATS[it.stat].label.toLowerCase())}</div></div>
+      <div class="lcv"><b class="${st[0]}">${cur}</b><span class="mut"> / ${tgtL(it.line)}</span></div></div>
     <div class="tbar big ${st[0]}"><i style="width:${Math.min(100, (cur / Math.max(it.line * 1.07, cur, 0.5)) * 100)}%"></i><em style="left:${(it.line / Math.max(it.line * 1.07, cur, 0.5)) * 100}%"></em></div>
     <div class="${st[0]} tiny" style="margin:6px 0">${st[1]}${L && !done && L.state === 'in' && lp != null ? ` · prob. de acertar ahora ${pct1(lp)}` : ''}</div>
     ${ser ? liveChart(ser, it.line, it.proj, cur) : ''}
@@ -3019,7 +3022,7 @@ function legNow(it) {
   if (it.pid) {
     const L = liveStat(it), lp = propLiveP(it).p;
     const cls = !L || L.state === 'pre' ? 'pend' : L.state === 'post' ? (lp === 1 ? 'ok' : 'bad') : lp >= 0.5 ? 'ok' : 'warn';
-    return { cls, val: L && L.state !== 'pre' ? `${L.cur ?? 0} / ${fmtL(it.line)}` : '' };
+    return { cls, val: L && L.state !== 'pre' ? `${L.cur ?? 0} / ${tgtL(it.line)}` : '' };
   }
   const g = gameLegLive(it);
   if (!g || g.state === 'pre') return { cls: 'pend', val: '' };
@@ -3126,7 +3129,7 @@ document.addEventListener('change', (e) => {
   if (t.id === 'pGame') { S.props.game = t.value; render(); }
   if (t.id === 'regStake') { S.regStake = t.value; render(); }
   if (t.id === 'regOdds') { S.regOdds = t.value; render(); }
-  if (t.id === 'lineIn') { if (t.value !== '') setLine(+t.value - (playerCtx()?.soccer ? 0.5 : 0)); render(); }
+  if (t.id === 'lineIn') { if (t.value !== '') setLine(+t.value - 0.5); render(); }
   if (t.id === 'priceIn') { const c = playerCtx(); if (c) { (S.detail.price ||= {})[c.key] = +t.value > 1 ? +t.value : undefined; } render(); }
   if (t.id === 'minMin') { S.detail.pf.minMin = +t.value; render(); }
   if (t.id === 'restSel') { S.detail.pf.rest = t.value; render(); }
