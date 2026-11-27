@@ -1,5 +1,5 @@
 // ALTOQ · login con Google (Firebase), cuotas en tiempo real (The Odds API) y detector de valor (EV+).
-import { modelFor, pendingReason, summaryFor, logPrediction, preLogged, settleResults, registryStats } from './model.js?v=22';
+import { modelFor, pendingReason, summaryFor, logPrediction, preLogged, settleResults, registryStats } from './model.js?v=23';
 const CFG = window.RUSHTOP_CONFIG || {};
 const TZ = 'America/Lima';
 const $ = (s) => document.querySelector(s);
@@ -276,7 +276,7 @@ async function fastLive() {
       const st = e.status?.type?.state, score = st === 'pre' ? null : [away?.score, home?.score];
       if (st !== ev.state || e.status?.displayClock !== ev.clock || JSON.stringify(score) !== JSON.stringify(ev.score)) {
         if (ev.state === 'pre' && st !== 'pre' && !ev.prePred && ev.pred) ev.prePred = ev.pred; // acaba de empezar
-        Object.assign(ev, { state: st, detail: e.status?.type?.shortDetail, clock: e.status?.displayClock, score, goals: goalsOf(c) }); changed = true;
+        Object.assign(ev, { state: st, detail: e.status?.type?.shortDetail, clock: e.status?.displayClock, score, goals: goalsOf(c), qs: ev.qs ? [away, home].map((x) => (x?.linescores || []).map((l) => +l.displayValue || 0)) : null }); changed = true;
       }
     }
     if (changed && !document.activeElement?.matches?.('input, select')) render();
@@ -509,7 +509,10 @@ function lvRow(a, favs, opt = {}) {
   const won = st === 'post' && ev.score ? (hs > as ? 'home' : as > hs ? 'away' : '') : '';
   // Rejilla de 2 filas: escudo · nombre · probabilidades · marcador. Las probabilidades van en una sola columna
   // que ocupa las dos filas, en el mismo orden que los equipos: arriba el de arriba, X (empate) al medio, abajo el de abajo
-  const team = (s, i) => `<div class="lt ${won && won !== s ? 'lose' : ''} ${won === s ? 'win' : ''}" style="--r:${i + 1}">${logoImg(teamLogo(ev, s))}<span class="ln">${esc(teamName(ev, s))}</span><b class="ls">${sc(s)}</b></div>`;
+  // NBA/NFL: parciales de cada cuarto (en claro el equipo que ganó ese cuarto)
+  const qv = st !== 'pre' && ev.qs?.[0]?.length ? { away: ev.qs[0], home: ev.qs[1] } : null;
+  const qcell = (s) => (qv ? `<span class="lq">${qv[s].map((v, k) => `<b class="${v > (qv[s === 'home' ? 'away' : 'home'][k] ?? 0) ? 'w' : ''}">${v}</b>`).join('')}</span>` : '');
+  const team = (s, i) => `<div class="lt ${won && won !== s ? 'lose' : ''} ${won === s ? 'win' : ''}" style="--r:${i + 1}">${logoImg(teamLogo(ev, s))}<span class="ln">${esc(teamName(ev, s))}</span>${qcell(s)}<b class="ls">${sc(s)}</b></div>`;
   // cada probabilidad con su letra: L (local), X (empate), V (visitante). Los números son los de ahora (en vivo);
   // terminado, los de antes del partido. El recuadro marca SIEMPRE la favorita del modelo antes de empezar
   // (verde si acertó, rojo si falló, al terminar)
@@ -944,7 +947,8 @@ function detailHeader(ev) {
     : ord(ev, awayB, homeB).join(`<div class="cb">${center}</div>`)}</div>
   <div class="seg wide">
     <button data-dtab="partido" class="${S.detail.tab === 'partido' ? 'on' : ''}">Partido</button>
-    ${isSoccerEv(ev) ? `<button data-dtab="stats" class="${S.detail.tab === 'stats' ? 'on' : ''}">Estadísticas</button>` : ''}
+    ${isSoccerEv(ev) || (isHoopEv(ev) && ev.state !== 'pre') ? `<button data-dtab="stats" class="${S.detail.tab === 'stats' ? 'on' : ''}">Estadísticas</button>` : ''}
+    ${isHoopEv(ev) && ev.state !== 'pre' ? `<button data-dtab="box" class="${S.detail.tab === 'box' ? 'on' : ''}">Box score</button>` : ''}
     <button data-dtab="players" class="${S.detail.tab === 'players' ? 'on' : ''}">Jugadores</button>
   </div>`;
 }
@@ -957,7 +961,10 @@ function viewDetail() {
   if (S.detail.player) return isGuest() ? detailHeader(ev) + lockCard('Perfil completo del jugador, línea ajustable y boleto') : playerProfile();
   // Dentro del partido todo usa la predicción de ANTES del partido; las de ahora van en su propia sección
   const aPre = preView(a);
-  const body = S.detail.tab === 'partido' ? partidoTab(aPre, ai, ev) : S.detail.tab === 'stats' ? statsTab(aPre) : playersSub(aPre);
+  const hoop = isHoopEv(ev) && ev.state !== 'pre';
+  const body = S.detail.tab === 'partido' ? partidoTab(aPre, ai, ev)
+    : S.detail.tab === 'stats' ? (hoop ? courtStatsTab(ev) : isSoccerEv(ev) ? statsTab(aPre) : partidoTab(aPre, ai, ev))
+    : S.detail.tab === 'box' ? (hoop ? boxTab(ev) : partidoTab(aPre, ai, ev)) : playersSub(aPre);
   return detailHeader(ev) + body;
 }
 
@@ -993,7 +1000,7 @@ function partidoTab(a, ai, liveEv) {
   const sum = need('sum', ev.id, `${espnBase(ev.path)}/summary?event=${ev.id}`);
   if (isGuest()) return ganadorSection(a, ai) + live + lockCard('El porqué del %, todas las salidas del modelo, historial, bajas, detalles y otros mercados');
   if (ev.path.startsWith('soccer')) return ganadorSection(a, ai) + live + historySection(ev) + detailsSection(ev) + soccerBajasSection(ev, sum) + soccerMarketsSection(a);
-  return ganadorSection(a, ai) + live + historySection(ev) + injuriesSection(ev, sum) + detailsSection(ev) + marketsSection(a, ai);
+  return ganadorSection(a, ai) + live + (liveEv ? courtCard(liveEv) : '') + historySection(ev) + injuriesSection(ev, sum) + detailsSection(ev) + marketsSection(a, ai);
 }
 
 // Ganador: probabilidad del MODELO frente a lo que dice la cuota de la casa
@@ -2415,6 +2422,221 @@ function matchStatsCard(ev) {
   return `<div class="card">${head}${rows ? `<div class="msteams">${lab(s1)}${lab(s2)}</div>${rows}` : '<p class="mut tiny">ESPN aún no publica estadísticas de este partido.</p>'}
     <p class="mut tiny">Datos de ESPN${ev.state === 'in' ? ', se actualizan cada 10 s' : ''}.</p></div>`;
 }
+// ---------- NBA/NFL dentro del partido: ventaja minuto a minuto, cuartos y mejor jugador de cada equipo ----------
+const hexLum = (h) => (h && /^[0-9a-f]{6}$/i.test(h) ? [0, 2, 4].reduce((s, i) => s + parseInt(h.slice(i, i + 2), 16), 0) : 0);
+const teamCol = (t, alt) => { const c = [t?.color, t?.alternateColor].find((x) => hexLum(x) > 150); return c ? '#' + c : alt; };
+function leadChart(sum, ev, sTop, cols) {
+  const comp = sum.header?.competitions?.[0], st = comp?.status || {};
+  const pts = [[0, 0]];
+  for (const p of sum.plays || []) {
+    if (p.homeScore == null || p.awayScore == null) continue;
+    const d = sTop === 'home' ? p.homeScore - p.awayScore : p.awayScore - p.homeScore;
+    const t = nbaT(p.period?.number || 1, p.clock?.displayValue);
+    if (d !== pts[pts.length - 1][1]) pts.push([t, d]);
+  }
+  if (pts.length < 2) return '';
+  const per = st.period || 4, done = st.type?.state === 'post';
+  const tNow = done ? (per <= 4 ? 48 : 48 + (per - 4) * 5) : nbaT(per, st.displayClock);
+  pts.push([tNow, pts[pts.length - 1][1]]);
+  const tMax = Math.max(48, tNow), m = Math.max(5, Math.ceil(Math.max(...pts.map((p) => Math.abs(p[1]))) / 5) * 5);
+  const W = 640, Hh = 170, pr = 0, x = (t) => (t / tMax) * (W - pr), y = (v) => Hh / 2 - (v / m) * (Hh / 2 - 4);
+  let d = `M0,${y(0)}`; for (const [t, v] of pts) d += ` L${x(t).toFixed(1)},${y(v).toFixed(1)}`;
+  d += ` L${x(tNow).toFixed(1)},${y(0)} Z`;
+  const marks = []; for (let t = 12; t < tMax; t += t < 48 ? 12 : 5) marks.push(t);
+  const id = 'lc' + ev.id;
+  return `<div class="leadw"><svg class="leadc" viewBox="0 0 ${W} ${Hh}" preserveAspectRatio="none" role="img" aria-label="Ventaja en el marcador">
+    <defs><clipPath id="${id}a"><rect x="0" y="0" width="${W}" height="${Hh / 2}"/></clipPath><clipPath id="${id}b"><rect x="0" y="${Hh / 2}" width="${W}" height="${Hh / 2}"/></clipPath></defs>
+    <rect x="0" y="0" width="${W - pr}" height="${Hh / 2}" fill="${cols[0]}" opacity=".13"/><rect x="0" y="${Hh / 2}" width="${W - pr}" height="${Hh / 2}" fill="${cols[1]}" opacity=".13"/>
+    <path d="${d}" fill="${cols[0]}" clip-path="url(#${id}a)"/><path d="${d}" fill="${cols[1]}" clip-path="url(#${id}b)"/>
+    ${marks.map((t) => `<line x1="${x(t)}" x2="${x(t)}" y1="0" y2="${Hh}" class="cg"/>`).join('')}
+    <line x1="0" x2="${W - pr}" y1="${y(0)}" y2="${y(0)}" class="ca"/>
+    </svg><div class="leady"><span>${m}</span><span>0</span><span>${m}</span></div></div>`;
+}
+function courtCard(ev) {
+  if (ev.state === 'pre' || isSoccerEv(ev) || !ev.path) return '';
+  const sum = liveSum({ eventId: ev.id, path: ev.path });
+  if (!sum) return `<div class="card"><h4>EL PARTIDO</h4><p class="mut tiny">Cargando el partido…</p></div>`;
+  const comp = sum.header?.competitions?.[0]; if (!comp) return '';
+  const cs = comp.competitors || [], C = { home: cs.find((c) => c.homeAway === 'home'), away: cs.find((c) => c.homeAway === 'away') };
+  const [s1, s2] = ord(ev, 'away', 'home'), other = (s) => (s === 'home' ? 'away' : 'home');
+  const cols = courtCols(sum, ev);
+  const done = comp.status?.type?.state === 'post';
+  // Gráfica de ventaja: arriba cuando gana el equipo de arriba
+  const chart = leadChart(sum, ev, s1, cols);
+  const when = new Date(ev.commence_time).toLocaleString('es-PE', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: TZ });
+  const key = (s, c) => `<span class="lkey"><i style="background:${c}"></i>${esc(s === 'home' ? ev.home_abbr : ev.away_abbr)}</span>`;
+  // Cuartos
+  const L = { home: (C.home?.linescores || []).map((l) => +l.displayValue || 0), away: (C.away?.linescores || []).map((l) => +l.displayValue || 0) };
+  const n = Math.max(L.home.length, L.away.length);
+  const qlab = (i) => (i < 4 ? 'C' + (i + 1) : 'P' + (i - 3));
+  const qrow = (s) => `<tr><td>${logoImg(teamLogo(ev, s))}</td>${Array.from({ length: n }, (_, i) => { const v = L[s][i], o = L[other(s)][i]; return `<td class="${v > (o ?? 0) ? 'w' : ''}">${v ?? '–'}</td>`; }).join('')}<td class="t ${+C[s]?.score > +C[other(s)]?.score ? 'w' : ''}">${esc(C[s]?.score ?? '–')}</td></tr>`;
+  const quarters = n ? `<table class="qtab"><tr><th></th>${Array.from({ length: n }, (_, i) => `<th>${qlab(i)}</th>`).join('')}<th>T</th></tr>${qrow(s1)}${qrow(s2)}</table>` : '';
+  return `<div class="card"><div class="ihead"><h4>EL PARTIDO</h4>${done ? '<span class="mut tiny">Final</span>' : `<span class="tag live">EN VIVO · ${esc(liveClock(ev))}</span>`}</div>
+    ${chart ? `<div class="lkeys">${key(s1, cols[0])}${key(s2, cols[1])}</div>${chart}<div class="lcfoot mut tiny"><span>${esc(when)}</span><span>${done ? 'Final' : esc(liveClock(ev))}</span></div>` : ''}
+    ${quarters}${ev.path.startsWith('basketball') && done ? bestPlayers(sum, ev, s1, s2) : ''}
+    ${chart ? '<p class="mut tiny">Ventaja en el marcador a lo largo del partido: arriba cuando gana ' + esc(s1 === 'home' ? ev.home_abbr : ev.away_abbr) + ', abajo cuando gana ' + esc(s2 === 'home' ? ev.home_abbr : ev.away_abbr) + '. Datos de ESPN.</p>' : ''}</div>`;
+}
+const isHoopEv = (ev) => !!ev.path?.startsWith('basketball');
+// Colores de los dos equipos en el orden de la pantalla (si son muy oscuros, el alternativo)
+function courtCols(sum, ev) {
+  const cs = sum.header?.competitions?.[0]?.competitors || [], C = (s) => cs.find((c) => c.homeAway === s)?.team;
+  const [s1, s2] = ord(ev, 'away', 'home'), cols = [teamCol(C(s1), '#ff7a1a'), teamCol(C(s2), '#6b7cff')];
+  if (cols[0] === cols[1]) cols[1] = '#6b7cff';
+  return cols;
+}
+// Valoración del jugador = Game Score de Hollinger; color según lo bueno que fue el partido
+const valCls = (v) => (v >= 25 ? 'v5' : v >= 18 ? 'v4' : v >= 10 ? 'v3' : v >= 5 ? 'v2' : 'v1');
+// Box score de ESPN → una fila por jugador que jugó
+function boxRows(sum, ev) {
+  const out = [];
+  for (const t of sum.boxscore?.players || []) {
+    const side = String(t.team?.id) === String(ev.home_id) ? 'home' : String(t.team?.id) === String(ev.away_id) ? 'away' : null;
+    const S0 = t.statistics?.[0]; if (!side || !S0) continue;
+    const k = S0.keys || [];
+    for (const a of S0.athletes || []) {
+      const st = a.stats || []; if (!st.length || a.didNotPlay) continue;
+      const g = (name) => st[k.indexOf(name)], n = (name) => +g(name) || 0, pair = (name) => String(g(name) || '0-0').split('-').map((v) => +v || 0);
+      const [fgm, fga] = pair('fieldGoalsMade-fieldGoalsAttempted'), [tpm, tpa] = pair('threePointFieldGoalsMade-threePointFieldGoalsAttempted'), [ftm, fta] = pair('freeThrowsMade-freeThrowsAttempted');
+      const r = { side, pid: a.athlete?.id, name: a.athlete?.shortName || a.athlete?.displayName || '', pos: a.athlete?.position?.abbreviation || '', num: a.athlete?.jersey || '',
+        img: a.athlete?.headshot?.href || '', starter: !!a.starter, min: n('minutes'), pts: n('points'), reb: n('rebounds'), ast: n('assists'), stl: n('steals'), blk: n('blocks'),
+        pf: n('fouls'), to: n('turnovers'), oreb: n('offensiveRebounds'), dreb: n('defensiveRebounds'), pm: n('plusMinus'), fgm, fga, tpm, tpa, ftm, fta };
+      r.val = r.pts + 0.4 * fgm - 0.7 * fga - 0.4 * (fta - ftm) + 0.7 * r.oreb + 0.3 * r.dreb + r.stl + 0.7 * r.ast + 0.7 * r.blk - 0.4 * r.pf - r.to;
+      out.push(r);
+    }
+  }
+  return out;
+}
+// Mejor jugador de cada equipo al terminar
+function bestPlayers(sum, ev, s1, s2) {
+  const rows = boxRows(sum, ev), top = (s) => rows.filter((r) => r.side === s).sort((x, y) => y.val - x.val)[0];
+  const A = top(s1), B = top(s2); if (!A || !B) return '';
+  const pl = (p, cls) => `<div class="bpp ${cls}"><div class="bpi">${p.img ? `<img src="${esc(p.img)}" alt="" loading="lazy">` : ''}<em class="${valCls(p.val)}">${num1(p.val)}</em></div><b>${esc(p.name)}</b></div>`;
+  const rws = [['pts', 'PTS'], ['reb', 'REB'], ['ast', 'AST'], ['stl', 'ROB'], ['blk', 'TAP']].map(([k, l]) => `<div class="bpr"><b class="${A[k] > B[k] ? 'acc' : ''}">${A[k]}</b><span>${l}</span><b class="${B[k] > A[k] ? 'acc' : ''}">${B[k]}</b></div>`).join('');
+  return `<div class="bph mut tiny">MEJOR JUGADOR DE CADA EQUIPO</div><div class="bp">${pl(A, 'l')}<div class="bps">${rws}</div>${pl(B, 'r')}</div>
+    <p class="mut tiny">El número junto a la foto es la valoración del partido (Game Score: puntos, tiros, rebotes, asistencias, robos, tapones, faltas y pérdidas). El resto, en Box score.</p>`;
+}
+// Zona del tiro en media cancha (ESPN: x 0-50 pies de banda a banda, y = pies desde el aro hacia el medio)
+function shotZone(co, three) {
+  if (!co || co.x < -5 || co.x > 55 || co.y < -10 || co.y > 60) return null;
+  const x = co.x, yb = co.y + 5.25; // desde la línea de fondo
+  if (three) return yb < 14 ? (x < 25 ? 'c3l' : 'c3r') : x < 17 ? 'w3l' : x > 33 ? 'w3r' : 'm3';
+  if (Math.abs(x - 25) <= 8 && yb < 19) return 'pnt';
+  return yb < 14 ? (x < 25 ? 'b2l' : 'b2r') : 'top';
+}
+// Estadísticas de equipo para todo el partido (per = 0) o un cuarto, sacadas de la jugada a jugada
+function courtAgg(sum, ev, per) {
+  const plays = sum.plays || [], hid = String(ev.home_id);
+  const side = (p) => (String(p.team?.id) === hid ? 'home' : 'away'), oth = (s) => (s === 'home' ? 'away' : 'home');
+  const z = () => ({ ftm: 0, fta: 0, p2m: 0, p2a: 0, p3m: 0, p3a: 0, oreb: 0, dreb: 0, ast: 0, to: 0, stl: 0, blk: 0, pf: 0, run: 0, lead: 0, big: 0, zones: {} });
+  const A = { home: z(), away: z() };
+  let runSide = null, run = 0;
+  for (const p of plays) {
+    if ((per && p.period?.number !== per) || !p.team?.id) continue;
+    const s = side(p), T = p.type?.text || '', X = A[s];
+    if (p.shootingPlay) {
+      const made = !!p.scoringPlay;
+      if (/free throw/i.test(T)) { X.fta++; if (made) X.ftm++; }
+      else {
+        const three = p.pointsAttempted === 3 || +p.scoreValue === 3;
+        if (three) { X.p3a++; if (made) X.p3m++; } else { X.p2a++; if (made) X.p2m++; }
+        if (made && p.participants?.[1]) X.ast++;
+        if (/block/i.test(p.text || '')) A[oth(s)].blk++;
+        const zn = shotZone(p.coordinate, three); if (zn) { const q = (X.zones[zn] ||= [0, 0]); q[1]++; if (made) q[0]++; }
+      }
+      if (made) { const v = +p.scoreValue || 0; if (s === runSide) run += v; else { runSide = s; run = v; } X.run = Math.max(X.run, run); }
+    } else if (/rebound/i.test(T)) { if (p.participants?.length) /^offensive/i.test(T) ? X.oreb++ : X.dreb++; }
+    else if (/turnover|traveling/i.test(T)) { X.to++; if (/steal/i.test(p.text || '')) A[oth(s)].stl++; }
+    else if (/foul|charge/i.test(T)) X.pf++;
+  }
+  // Tiempo en ventaja y mayor ventaja
+  const range = per ? (per <= 4 ? [(per - 1) * 12, per * 12] : [48 + (per - 5) * 5, 48 + (per - 4) * 5]) : [0, Infinity];
+  const ser = [[0, 0]];
+  for (const p of plays) if (p.homeScore != null && p.awayScore != null) { const d = p.homeScore - p.awayScore; if (d !== ser[ser.length - 1][1]) ser.push([nbaT(p.period?.number || 1, p.clock?.displayValue), d]); }
+  const st = sum.header?.competitions?.[0]?.status || {}, p0 = st.period || 4;
+  const tEnd = st.type?.state === 'post' ? (p0 <= 4 ? 48 : 48 + (p0 - 4) * 5) : nbaT(p0, st.displayClock);
+  for (let i = 0; i < ser.length; i++) {
+    const [t, d] = ser[i], t2 = i + 1 < ser.length ? ser[i + 1][0] : tEnd, a = Math.max(t, range[0]), b = Math.min(t2, range[1], tEnd);
+    if (b <= a) continue;
+    if (d > 0) { A.home.lead += b - a; A.home.big = Math.max(A.home.big, d); } else if (d < 0) { A.away.lead += b - a; A.away.big = Math.max(A.away.big, -d); }
+  }
+  // Todo el partido: los totales oficiales del box score de ESPN
+  if (!per) for (const t of sum.boxscore?.teams || []) {
+    const s = String(t.team?.id) === hid ? 'home' : 'away', X = A[s], g = (n) => t.statistics?.find((x) => x.name === n)?.displayValue;
+    const pr = (n) => String(g(n) || '').split('-').map((v) => +v);
+    const [fgm, fga] = pr('fieldGoalsMade-fieldGoalsAttempted'), [tpm, tpa] = pr('threePointFieldGoalsMade-threePointFieldGoalsAttempted'), [ftm, fta] = pr('freeThrowsMade-freeThrowsAttempted');
+    if (isFinite(fga) && isFinite(tpa)) Object.assign(X, { p3m: tpm, p3a: tpa, p2m: fgm - tpm, p2a: fga - tpa });
+    if (isFinite(fta)) Object.assign(X, { ftm, fta });
+    for (const [k, n] of [['oreb', 'offensiveRebounds'], ['dreb', 'defensiveRebounds'], ['ast', 'assists'], ['stl', 'steals'], ['blk', 'blocks'], ['to', 'turnovers'], ['pf', 'fouls']]) if (isFinite(+g(n)) && g(n) !== undefined) X[k] = +g(n);
+  }
+  return A;
+}
+// Media cancha con los tiros de campo por zona (anotados/intentados), más intenso cuanto mejor el %
+const ZONES = {
+  c3l: ['M0,0 H30 V140 H0 Z', 6, 30, 'start'], c3r: ['M470,0 H500 V140 H470 Z', 494, 30, 'end'],
+  b2l: ['M30,0 H170 V140 H30 Z', 100, 75], b2r: ['M330,0 H470 V140 H330 Z', 400, 75], pnt: ['M170,0 H330 V190 H170 Z', 250, 120],
+  top: ['M30,140 H170 V190 H330 V140 H470 A237.5,237.5 0 0 1 30,140 Z', 250, 245],
+  w3l: ['M0,140 H30 A237.5,237.5 0 0 0 170,276.1 V400 H0 Z', 80, 330], m3: ['M170,276.1 A237.5,237.5 0 0 0 330,276.1 V400 H170 Z', 250, 350],
+  w3r: ['M330,276.1 A237.5,237.5 0 0 0 470,140 H500 V400 H330 Z', 420, 330],
+};
+function shotMap(zones, col) {
+  const paths = Object.entries(ZONES).map(([k, [d, tx, ty, an]]) => {
+    const [m, a] = zones[k] || [0, 0], op = a ? 0.18 + 0.82 * (m / a) : 0.06;
+    return `<path d="${d}" fill="${col}" fill-opacity="${op.toFixed(2)}" class="smz"/>` + (a ? `<text x="${tx}" y="${ty}" class="smt"${an ? ` style="text-anchor:${an}"` : ''}>${m}/${a}</text>` : '');
+  }).join('');
+  return `<svg class="smap" viewBox="0 0 500 400" role="img" aria-label="Mapa de tiros">${paths}
+    <line x1="220" x2="280" y1="40" y2="40" class="sml"/><circle cx="250" cy="52.5" r="7.5" class="sml"/><circle cx="250" cy="190" r="60" class="sml"/>
+    <rect x="0.5" y="0.5" width="499" height="399" class="sml"/></svg>`;
+}
+const mmss = (min) => `${Math.floor(min)}:${String(Math.round((min % 1) * 60) % 60).padStart(2, '0')}`;
+function courtStatsTab(ev) {
+  const sum = liveSum({ eventId: ev.id, path: ev.path });
+  if (!sum) return `<div class="card empty">Cargando estadísticas…</div>`;
+  const nPer = Math.max(4, ...(sum.header?.competitions?.[0]?.competitors || []).map((c) => (c.linescores || []).length));
+  const per = S.detail.q > 0 && S.detail.q <= nPer ? S.detail.q : 0;
+  const X = courtAgg(sum, ev, per), [s1, s2] = ord(ev, 'away', 'home'), cols = courtCols(sum, ev), a = X[s1], b = X[s2];
+  const qseg = `<div class="seg wide qseg"><button data-cq="0" class="${!per ? 'on' : ''}">Todo</button>${Array.from({ length: nPer }, (_, i) => `<button data-cq="${i + 1}" class="${per === i + 1 ? 'on' : ''}">${i < 4 ? 'C' + (i + 1) : 'P' + (i - 3)}</button>`).join('')}</div>`;
+  const ring = (m, n, c, on) => { const r = 22, L = 2 * Math.PI * r, p = n ? m / n : 0; return `<div class="ring"><svg viewBox="0 0 56 56"><circle cx="28" cy="28" r="${r}" class="rbg"/><circle cx="28" cy="28" r="${r}" class="rfg" stroke="${c}" stroke-opacity="${on ? 1 : 0.4}" stroke-dasharray="${(p * L).toFixed(1)} ${L.toFixed(1)}" transform="rotate(-90 28 28)"/></svg><b>${Math.round(p * 100)}%</b></div>`; };
+  const shot = (lab, mk, ak) => {
+    const pa = a[ak] ? a[mk] / a[ak] : 0, pb = b[ak] ? b[mk] / b[ak] : 0;
+    return `<div class="shr"><span>${a[mk]}/${a[ak]}</span>${ring(a[mk], a[ak], cols[0], pa >= pb)}<b>${lab}</b>${ring(b[mk], b[ak], cols[1], pb >= pa)}<span>${b[mk]}/${b[ak]}</span></div>`;
+  };
+  for (const o of [a, b]) Object.assign(o, { fgm: o.p2m + o.p3m, fga: o.p2a + o.p3a });
+  // Barras: grande (rebotes, asistencias) o fina; en pérdidas y faltas gana el que tiene menos
+  const bar = (lab, va, vb, { big, low, fmt = (v) => v } = {}) => {
+    const tot = va + vb, wa = tot ? (va / tot) * 100 : 50, wb = tot ? (vb / tot) * 100 : 50;
+    const ba = low ? va < vb : va > vb, bb = low ? vb < va : vb > va;
+    if (big) return `<div class="cbg"><div class="cbh"><em style="background:${cols[0]}">${fmt(va)}</em><b>${lab}</b><em style="background:${cols[1]}">${fmt(vb)}</em></div><div class="cbb"><i style="width:${wa}%;background:${cols[0]}"></i><i style="width:${wb}%;background:${cols[1]}"></i></div></div>`;
+    return `<div class="msr"><div class="msv"><b>${fmt(va)}</b><span>${lab}</span><b>${fmt(vb)}</b></div><div class="msb"><span><i style="width:${wa}%;background:${cols[0]};opacity:${ba ? 1 : 0.4}"></i></span><span><i style="width:${wb}%;background:${cols[1]};opacity:${bb ? 1 : 0.4}"></i></span></div></div>`;
+  };
+  const lab = (s, c) => `<span class="lkey"><i style="background:${c}"></i>${esc(s === 'home' ? ev.home_abbr : ev.away_abbr)}</span>`;
+  const keys = `<div class="msteams">${lab(s1, cols[0])}${lab(s2, cols[1])}</div>`;
+  const logo = (s) => logoImg(teamLogo(ev, s), 'smlogo');
+  return `${qseg}
+    <div class="card">${keys}${shot('Tiros libres', 'ftm', 'fta')}${shot('Dobles', 'p2m', 'p2a')}${shot('Triples', 'p3m', 'p3a')}${shot('Tiros de campo', 'fgm', 'fga')}</div>
+    <div class="card">${keys}${bar('Rebotes', a.oreb + a.dreb, b.oreb + b.dreb, { big: 1 })}${bar('Rebotes defensivos', a.dreb, b.dreb)}${bar('Rebotes ofensivos', a.oreb, b.oreb)}
+      ${bar('Asistencias', a.ast, b.ast, { big: 1 })}${bar('Pérdidas', a.to, b.to, { low: 1 })}${bar('Robos', a.stl, b.stl)}${bar('Tapones', a.blk, b.blk)}${bar('Faltas', a.pf, b.pf, { low: 1 })}</div>
+    <div class="card">${keys}${bar('Máx. puntos seguidos', a.run, b.run)}${bar('Tiempo en ventaja', a.lead, b.lead, { fmt: mmss })}${bar('Mayor ventaja', a.big, b.big)}</div>
+    <div class="card"><h4>MAPA DE TIROS</h4><div class="smaps"><div class="smw">${shotMap(a.zones, cols[0])}${logo(s1)}</div><div class="smw">${shotMap(b.zones, cols[1])}${logo(s2)}</div></div>
+      <p class="mut tiny">Tiros de campo anotados / intentados por zona (sin tiros libres); más intenso cuanto mejor el porcentaje.</p></div>
+    <p class="mut tiny">${per ? 'Cuarto calculado con la jugada a jugada de ESPN.' : 'Totales del box score de ESPN; rachas, ventaja y mapa con la jugada a jugada.'}${ev.state === 'in' ? ' Se actualiza cada 10 s.' : ''}</p>`;
+}
+// Box score: todos los jugadores, de los dos equipos o de uno, ordenable por columna
+const BOXC = [['val', 'VAL'], ['min', 'MIN'], ['pts', 'PTS'], ['reb', 'REB'], ['ast', 'AST'], ['stl', 'ROB'], ['blk', 'TAP'], ['pf', 'FP'], ['to', 'PÉR'],
+  ['oreb', 'REB-O'], ['dreb', 'REB-D'], ['fg', 'TC'], ['tp', '3P'], ['ft', 'TL'], ['pm', '+/-']];
+function boxTab(ev) {
+  const sum = liveSum({ eventId: ev.id, path: ev.path });
+  if (!sum) return `<div class="card empty">Cargando el box score…</div>`;
+  const bx = ['home', 'away', 'both'].includes(S.detail.bx) ? S.detail.bx : 'both', key = BOXC.some(([k]) => k === S.detail.bxs) ? S.detail.bxs : 'val';
+  const sortV = (r) => (key === 'fg' ? r.fgm : key === 'tp' ? r.tpm : key === 'ft' ? r.ftm : r[key]);
+  const rows = boxRows(sum, ev).filter((r) => bx === 'both' || r.side === bx).sort((x, y) => sortV(y) - sortV(x) || y.val - x.val);
+  const [s1, s2] = ord(ev, 'away', 'home');
+  const tb = (v, inner) => `<button data-bx="${v}" class="${bx === v ? 'on' : ''}">${inner}</button>`;
+  const seg = `<div class="teamseg bxseg">${tb(s1, logoImg(teamLogo(ev, s1)))}${tb('both', `${logoImg(teamLogo(ev, s1))} + ${logoImg(teamLogo(ev, s2))}`)}${tb(s2, logoImg(teamLogo(ev, s2)))}</div>`;
+  const cell = (r, k) => (k === 'val' ? `<td><em class="bxv ${valCls(r.val)}">${num1(r.val)}</em></td>` : k === 'min' ? `<td>${r.min}'</td>` : k === 'fg' ? `<td>${r.fgm}-${r.fga}</td>` : k === 'tp' ? `<td>${r.tpm}-${r.tpa}</td>` : k === 'ft' ? `<td>${r.ftm}-${r.fta}</td>` : k === 'pm' ? `<td>${r.pm > 0 ? '+' : ''}${r.pm}</td>` : `<td>${r[k]}</td>`);
+  const tr = (r) => `<tr class="${r.starter ? 'st' : ''}"><td class="bxp"><div class="bxf">${r.img ? `<img src="${esc(r.img)}" alt="" loading="lazy">` : '<i></i>'}${logoImg(teamLogo(ev, r.side), 'bxtl')}</div><div><b>${esc(r.name)}</b><span class="mut tiny">${esc(r.num)} ${esc(r.pos)}</span></div></td>${BOXC.map(([k]) => cell(r, k)).join('')}</tr>`;
+  return `${seg}<div class="card"><div class="scroll"><table class="bxt"><tr><th class="bxp">Jugador</th>${BOXC.map(([k, l]) => `<th data-bxs="${k}" class="${k === key ? 'on' : ''}">${l}${k === key ? ' ▾' : ''}</th>`).join('')}</tr>${rows.map(tr).join('')}</table></div>
+    <p class="mut tiny">VAL = valoración del partido (Game Score de Hollinger). Toca una columna para ordenar. Línea naranja = titular. Datos de ESPN.</p></div>`;
+}
 function statsTab(a) {
   const ev = a.ev;
   if (isGuest()) return lockCard('Córners, tarjetas, tiros y más estadísticas del partido');
@@ -2614,6 +2836,9 @@ document.addEventListener('click', (e) => {
   if (t.dataset.featgo) { S.lv.feat = +t.dataset.featgo; return render(); }
   if (t.dataset.fcf) { S.fc = t.dataset.fcf; store.set('fc', S.fc); return render(); }
   if (t.dataset.dteam) { S.detail.team = t.dataset.dteam; return render(); }
+  if (t.dataset.cq != null) { S.detail.q = +t.dataset.cq; return render(); }
+  if (t.dataset.bx) { S.detail.bx = t.dataset.bx; return render(); }
+  if (t.dataset.bxs) { S.detail.bxs = t.dataset.bxs; return render(); }
   // Props
   const P = S.props;
   if (t.dataset.pstat) { P.stat = t.dataset.pstat; return render(); }
@@ -2758,6 +2983,8 @@ async function fetchEspn() {
       // predicción de antes del partido: si la última vez seguía sin empezar, esa es la de antes
       prePred: ((o) => o?.prePred || (o?.state === 'pre' ? o.pred : undefined))(S.events.find((x) => x.id === e.id)),
       goals: goalsOf(c),
+      // parciales por cuarto (NBA/NFL): [visitante, local]
+      qs: path.startsWith('soccer') ? null : [away, home].map((x) => (x.linescores || []).map((l) => +l.displayValue || 0)),
       provider: o?.provider?.name || 'DraftKings',
       bookmakers: markets.length ? [{ key: 'draftkings', title: o?.provider?.name || 'DraftKings', markets }] : [],
     };
