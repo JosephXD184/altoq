@@ -1,5 +1,5 @@
 // ALTOQ · login con Google (Firebase), cuotas en tiempo real (The Odds API) y detector de valor (EV+).
-import { modelFor, pendingReason, summaryFor, logPrediction, preLogged, settleResults, registryStats } from './model.js?v=30';
+import { modelFor, pendingReason, summaryFor, logPrediction, preLogged, settleResults, registryStats } from './model.js?v=31';
 const CFG = window.RUSHTOP_CONFIG || {};
 const TZ = 'America/Lima';
 const $ = (s) => document.querySelector(s);
@@ -255,7 +255,7 @@ function schedule() {
 // Goles del partido (fútbol) desde el marcador de ESPN: quién, minuto y equipo
 const goalsOf = (c) => (c?.details || []).filter((d) => d.scoringPlay).map((d) => ({
   team: String(d.team?.id || ''), name: d.athletesInvolved?.[0]?.shortName || d.athletesInvolved?.[0]?.displayName || 'Gol',
-  min: d.clock?.displayValue || '', pen: !!d.penaltyKick, og: !!d.ownGoal,
+  min: d.clock?.displayValue || '', pen: !!d.penaltyKick, og: !!d.ownGoal, so: !!d.shootout,
 }));
 const LIVE_MS = 10000;
 const bust = (u) => u + (u.includes('?') ? '&' : '?') + '_=' + Date.now(); // evita respuestas guardadas por el navegador
@@ -502,6 +502,25 @@ function prePick(ev) {
   const p = preP(ev); if (!p) return null;
   return ['home', 'draw', 'away'].filter((s) => p[s] != null).sort((x, y) => p[y] - p[x])[0];
 }
+// Pago anticipado: equipos que en algún momento sacaron la ventaja (fútbol 2 goles, NBA +20, NFL +17).
+// Una vez alcanzada se cobra pase lo que pase después
+function paSides(ev) {
+  if (ev.state === 'pre' || !ev.path) return [];
+  const out = [], lead = { home: 0, away: 0 };
+  const push = (d) => { if (d > 0) lead.home = Math.max(lead.home, d); else lead.away = Math.max(lead.away, -d); };
+  if (isSoccerEv(ev)) {
+    // ESPN apunta el autogol al equipo que se beneficia
+    const sc = { home: 0, away: 0 };
+    for (const g of ev.goals || []) { if (g.so) continue; const s = g.team === String(ev.home_id) ? 'home' : g.team === String(ev.away_id) ? 'away' : null; if (!s) continue; sc[s]++; push(sc.home - sc.away); }
+    for (const s of ['home', 'away']) if (lead[s] >= 2) out.push(s);
+    return out;
+  }
+  const sum = ev.state === 'in' ? liveSum({ eventId: ev.id, path: ev.path }) : need('sum', ev.id, `${espnBase(ev.path)}/summary?event=${ev.id}`);
+  if (!sum) return out;
+  for (const p of playsOf(sum)) if (p.homeScore != null && p.awayScore != null) push(p.homeScore - p.awayScore);
+  for (const s of ['home', 'away']) if (lead[s] >= earlyOf(ev)) out.push(s);
+  return out;
+}
 function lvRow(a, favs, opt = {}) {
   const ev = a.ev, p = probsOf(a), st = ev.state, L = ev.lines || {};
   const sc = (s) => (st === 'pre' ? '' : esc(ev.score?.[s === 'home' ? 1 : 0] ?? ''));
@@ -518,7 +537,17 @@ function lvRow(a, favs, opt = {}) {
   // (verde si acertó, rojo si falló, al terminar)
   const pp = st === 'post' ? preP(ev) || p : p, best = prePick(ev);
   const res = st === 'post' && ev.score ? (hs > as ? 'home' : as > hs ? 'away' : 'draw') : null;
-  const [t1, t2] = ord(ev, 'away', 'home'), pv = (s) => `<span class="lpx ${s === best ? 'top' + (res ? (res === s ? ' hit' : ' miss') : '') : ''}"><i>${s === 'home' ? 'L' : s === 'away' ? 'V' : 'X'}</i> ${pp?.[s] != null ? pctEs(pp[s]) : '–'}</span>`;
+  // Pago anticipado: el equipo que llegó a la ventaja lleva "PA" y su apuesta cuenta como cobrada aunque luego
+  // le remonten; el que ganó de verdad se marca como ganador (✓)
+  const pa = paSides(ev);
+  const cls = (s) => {
+    const c = [];
+    if (s === best) c.push('top', res ? (res === s || pa.includes(s) ? 'hit' : 'miss') : pa.includes(s) ? 'hit' : '');
+    if (res === s) c.push('won');
+    if (pa.includes(s)) c.push('pa');
+    return c.join(' ');
+  };
+  const [t1, t2] = ord(ev, 'away', 'home'), pv = (s) => `<span class="lpx ${cls(s)}" ${pa.includes(s) ? 'title="Pago anticipado cobrado"' : ''}>${pa.includes(s) ? '<em class="pab">PA</em>' : ''}${res === s ? '<em class="wck">✓</em>' : ''}<i>${s === 'home' ? 'L' : s === 'away' ? 'V' : 'X'}</i> ${pp?.[s] != null ? pctEs(pp[s]) : '–'}</span>`;
   const draw = pp ? `<span class="lps">${pv(t1)}${pp.draw != null ? pv('draw') : ''}${pv(t2)}</span>` : '';
   const oddsDef = homeFirst(ev) ? [['1', L.mlHome], ['X', L.mlDraw], ['2', L.mlAway]] : [[ev.away_abbr, L.mlAway], [ev.home_abbr, L.mlHome]];
   const odds = S.lv.odds && st !== 'post' ? `<div class="lodds">${oddsDef.map(([k, v]) => `<span><i>${esc(k)}</i>${v ? fmtOdd(v) : '–'}</span>`).join('')}</div>` : '';
@@ -2618,7 +2647,6 @@ function momentumCard(ev) {
   const sc = { home: 0, away: 0 }, paF = {};
   for (const k of (sum.keyEvents || []).filter((k) => k.scoringPlay && !k.shootout)) {
     let s = String(k.team?.id) === String(ev.home_id) ? 'home' : String(k.team?.id) === String(ev.away_id) ? 'away' : null; if (!s) continue;
-    if (/own/i.test(k.type?.type || '')) s = s === 'home' ? 'away' : 'home';
     sc[s]++;
     const o = s === 'home' ? 'away' : 'home';
     if (sc[s] - sc[o] >= 2 && !paF[s]) paF[s] = { min: k.clock?.displayValue || '', m: parseInt(k.clock?.displayValue) || 0, score: `${sc.home}-${sc.away}` };

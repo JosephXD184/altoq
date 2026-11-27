@@ -634,3 +634,7 @@ table.bxt{width:100%;border-collapse:collapse;font-size:14px;white-space:nowrap}
 .mico.og{filter:grayscale(1) opacity(.7)}
 .mico.red{width:10px;height:14px;background:#e5383b;border-radius:2px;top:4px}
 .mico.pa{margin-left:18px;background:var(--good);color:#06200f;font-size:10px;font-weight:900;border-radius:5px;padding:0 4px;line-height:16px;top:3px;z-index:1}
+/* Fila: ganador real (✓) y pago anticipado (PA) */
+.lpx.won{color:var(--good)}
+.lpx .wck{font-style:normal;font-weight:900;color:var(--good);margin-right:3px}
+.lpx .pab{font-style:normal;font-size:9px;font-weight:900;background:var(--good);color:#06200f;border-radius:4px;padding:0 3px;margin-right:4px;line-height:13px;display:inline-block;vertical-align:1px}
