@@ -14,7 +14,7 @@ let remaining = Infinity;
 async function api(path) {
   if (remaining < 6) throw new Error('budget');
   const r = await fetch(API + path, { headers: { 'x-apisports-key': KEY } });
-  const rem = +r.headers.get('x-ratelimit-requests-remaining'); if (Number.isFinite(rem)) remaining = rem;
+  const rh = r.headers.get('x-ratelimit-requests-remaining'); if (rh != null && Number.isFinite(+rh)) remaining = +rh;
   const j = await r.json().catch(() => null);
   const errs = j?.errors && (Array.isArray(j.errors) ? j.errors : Object.values(j.errors));
   if (!r.ok || errs?.length) throw new Error('api:' + (errs?.join(' ') || r.status));
@@ -43,8 +43,8 @@ async function day(date) {
 
 const iso = (d) => d.toISOString().slice(0, 10);
 const now = Date.now();
-// hoy y mañana: cada ~2 h · pasado mañana y el siguiente: cada ~6 h
-const plan = [0, 1, 2, 3].map((k) => ({ date: iso(new Date(now + k * 864e5)), maxAge: (k <= 1 ? 100 : 350) * 60e3 }));
+// hoy y mañana, cada ~2 h (el plan gratis solo deja consultar de ayer a mañana)
+const plan = [0, 1].map((k) => ({ date: iso(new Date(now + k * 864e5)), maxAge: 100 * 60e3 }));
 for (const { date, maxAge } of plan) {
   const f = `${OUT}/${date}.json`;
   if (existsSync(f)) { try { const o = JSON.parse(readFileSync(f, 'utf8')); if (!o.error && now - o.at < maxAge) continue; } catch {} }
@@ -56,7 +56,7 @@ for (const { date, maxAge } of plan) {
     console.error(date, e.message);
     if (e.message === 'budget') break;
     if (!existsSync(f)) writeFileSync(f, JSON.stringify({ date, error: e.message, at: now }));
-    if (/plan|season|key|token/i.test(e.message)) process.exitCode = 1;
+    if (/key|token/i.test(e.message)) process.exitCode = 1; // clave mala: falla; límites del plan: solo se avisa
   }
 }
 // limpia días viejos
