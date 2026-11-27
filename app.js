@@ -1,5 +1,5 @@
 // ALTOQ · login con Google (Firebase), cuotas en tiempo real (The Odds API) y detector de valor (EV+).
-import { modelFor, pendingReason, summaryFor, logPrediction, preLogged, settleResults, registryStats } from './model.js?v=24';
+import { modelFor, pendingReason, summaryFor, logPrediction, preLogged, settleResults, registryStats } from './model.js?v=25';
 const CFG = window.RUSHTOP_CONFIG || {};
 const TZ = 'America/Lima';
 const $ = (s) => document.querySelector(s);
@@ -889,7 +889,7 @@ function viewPerfil() {
 }
 // ---------- Página del partido ----------
 // Datos extra de ESPN (se piden al abrir el partido y se guardan en caché)
-const D = { sum: {}, sched: {}, roster: {}, glog: {}, stand: {}, live: {} };
+const D = { sum: {}, sched: {}, roster: {}, glog: {}, stand: {}, live: {}, xodds: {} };
 const espnBase = (p) => `https://site.api.espn.com/apis/site/v2/sports/${p}`;
 const getJ = (u) => fetch(u).then((r) => (r.ok ? r.json() : null)).catch(() => null);
 async function cached(bucket, key, url, maxAge = 6e5) {
@@ -995,12 +995,47 @@ function liveProbCard(ev) {
     <div class="lpcs" style="--n:${opts.length}">${opts.map(cell).join('')}</div>
     <p class="mut tiny">El modelo recalculado con el marcador y el minuto actuales${xg}. Arriba siguen las probabilidades de antes del partido.</p></div>`;
 }
+// ---------- Comparador de cuotas: todas las casas que publica ESPN para el partido ----------
+const fracDec = (s) => { const m = String(s || '').match(/^(\d+)\/(\d+)$/); return m ? Math.round((1 + m[1] / m[2]) * 100) / 100 : null; };
+function bookOdds(j) {
+  return (j?.items || []).map((x) => {
+    const name = x.provider?.name || '', T = x.bettingOdds?.teamOdds || {};
+    const dec = (side) => { const o = side === 'draw' ? x.drawOdds : x[side + 'TeamOdds']; const v = o?.odds?.value ?? o?.value; return v ? +v : amToDec(o?.moneyLine ?? o?.current?.moneyLine?.american); };
+    const r = { name, home: dec('home'), away: dec('away'), draw: dec('draw'), line: null, over: null, under: null };
+    if (T.preMatchGoalLineOver) Object.assign(r, { line: +T.preMatchOverUnderHandicap?.value || null, over: fracDec(T.preMatchGoalLineOver.value), under: fracDec(T.preMatchGoalLineUnder?.value) });
+    else if (x.overUnder != null) Object.assign(r, { line: +x.overUnder, over: amToDec(x.overOdds), under: amToDec(x.underOdds) });
+    return r;
+  }).filter((r) => r.home || r.away);
+}
+function booksCard(ev) {
+  if (!ev.path) return '';
+  const [sp, lg] = ev.path.split('/');
+  const j = need('xodds', ev.id, `https://sports.core.api.espn.com/v2/sports/${sp}/leagues/${lg}/events/${ev.id}/competitions/${ev.id}/odds?limit=50`);
+  if (j === undefined) return `<div class="card"><h4>CUOTAS DE LAS CASAS</h4><p class="mut tiny">Cargando cuotas…</p></div>`;
+  const rows = bookOdds(j); if (!rows.length) return '';
+  const pr = ev.pred, soccer = isSoccerEv(ev);
+  const pm = { home: pr?.pHome, away: pr?.pAway, draw: pr?.pDraw };
+  const [s1, s2] = ord(ev, 'away', 'home');
+  const cols = [[s1, ev[s1 + '_abbr'] || (s1 === 'home' ? '1' : '2')], ...(soccer ? [['draw', 'X']] : []), [s2, ev[s2 + '_abbr']]];
+  const lines = [...new Set(rows.map((r) => r.line).filter((v) => v != null))];
+  const tot = lines.length === 1 ? lines[0] : null; // más/menos solo si todas las casas usan la misma línea
+  const best = Object.fromEntries([...cols.map(([k]) => k), 'over', 'under'].map((k) => [k, Math.max(...rows.map((r) => r[k] || 0))]));
+  const cell = (r, k) => {
+    const v = r[k]; if (!v) return '<td class="mut">–</td>';
+    const val = pm[k] != null && pm[k] * v > 1.02; // la cuota paga más de lo que el modelo cree justo
+    return `<td class="${v === best[k] && rows.length > 1 ? 'bk' : ''} ${val ? 'val' : ''}">${fmtOdd(v)}</td>`;
+  };
+  const fair = pr ? `<tr class="fair"><td>Cuota justa ALTOQ</td>${cols.map(([k]) => `<td>${pm[k] ? fmtOdd(1 / pm[k]) : '–'}</td>`).join('')}${tot != null ? '<td>–</td><td>–</td>' : ''}</tr>` : '';
+  return `<div class="card"><h4>CUOTAS DE LAS CASAS</h4><div class="scroll"><table class="mtable bkt"><tr><th></th>${cols.map(([, l]) => `<th>${esc(l)}</th>`).join('')}${tot != null ? `<th>Más ${fmtL(tot)}</th><th>Menos ${fmtL(tot)}</th>` : ''}</tr>
+    ${rows.map((r) => `<tr><td><b>${esc(r.name)}</b></td>${cols.map(([k]) => cell(r, k)).join('')}${tot != null ? cell(r, 'over') + cell(r, 'under') : ''}</tr>`).join('')}${fair}</table></div>
+    <p class="mut tiny">${rows.length > 1 ? 'Naranja: la mejor cuota entre las casas. ' : ''}Verde: la cuota paga más que la cuota justa del modelo (posible valor). Cuotas de las casas que publica ESPN para este partido${ev.state !== 'pre' ? ' (las de cierre)' : ''}.</p></div>`;
+}
 function partidoTab(a, ai, liveEv) {
   const ev = a.ev, live = liveEv ? liveProbCard(liveEv) : '';
   const sum = need('sum', ev.id, `${espnBase(ev.path)}/summary?event=${ev.id}`);
   if (isGuest()) return ganadorSection(a, ai) + live + lockCard('El porqué del %, todas las salidas del modelo, historial, bajas, detalles y otros mercados');
-  if (ev.path.startsWith('soccer')) return ganadorSection(a, ai) + live + historySection(ev) + detailsSection(ev) + soccerBajasSection(ev, sum) + soccerMarketsSection(a);
-  return ganadorSection(a, ai) + live + (liveEv ? courtCard(liveEv) : '') + historySection(ev) + injuriesSection(ev, sum) + detailsSection(ev) + marketsSection(a, ai);
+  if (ev.path.startsWith('soccer')) return ganadorSection(a, ai) + live + booksCard(ev) + historySection(ev) + detailsSection(ev) + soccerBajasSection(ev, sum) + soccerMarketsSection(a);
+  return ganadorSection(a, ai) + live + (liveEv ? courtCard(liveEv) : '') + booksCard(ev) + historySection(ev) + injuriesSection(ev, sum) + detailsSection(ev) + marketsSection(a, ai);
 }
 
 // Ganador: probabilidad del MODELO frente a lo que dice la cuota de la casa
