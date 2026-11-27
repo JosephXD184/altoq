@@ -1,5 +1,5 @@
 // ALTOQ · login con Google (Firebase), cuotas en tiempo real (The Odds API) y detector de valor (EV+).
-import { modelFor, pendingReason, summaryFor, logPrediction, preLogged, settleResults, registryStats } from './model.js?v=35';
+import { modelFor, pendingReason, summaryFor, logPrediction, preLogged, settleResults, registryStats } from './model.js?v=36';
 const CFG = window.RUSHTOP_CONFIG || {};
 const TZ = 'America/Lima';
 const $ = (s) => document.querySelector(s);
@@ -959,6 +959,70 @@ function seasonEvents(path, year, start, stype) {
 // Resultado para un equipo: G / E / P
 const resFor = (e, id) => { const me = e.home.id === id ? e.home : e.away, op = e.home.id === id ? e.away : e.home; return +me.score > +op.score ? 'W' : +me.score < +op.score ? 'L' : 'D'; };
 const RES_ES = { W: 'G', D: 'E', L: 'P' };
+// Entrenador actual. NBA/NFL: la plantilla de ESPN. Fútbol: ESPN solo trae la lista histórica, así que se usa
+// Wikidata (la base de Wikipedia): «entrenador» del club sin fecha de fin. Se guarda 3 días en este navegador
+const COACH = {};
+// Fútbol: 1) la ficha de Wikipedia del club (campo «entrenador», en español y si no en inglés), que se actualiza rápido;
+// 2) si no, Wikidata (entrenador sin fecha de fin); 3) si no se encuentra el club, búsqueda directa en Wikipedia
+const WD = 'https://www.wikidata.org/w/api.php?format=json&origin=*&';
+function wikiClean(v) {
+  if (!v) return null;
+  v = v.replace(/<!--[\s\S]*?-->/g, '').replace(/<ref[^>]*\/>/g, '').replace(/<ref[\s\S]*?<\/ref>/g, '').replace(/\{\{[^{}]*\}\}/g, '')
+    .replace(/\[\[(?:[^\]|]*\|)?([^\]]+)\]\]/g, '$1').replace(/'''?/g, '').replace(/<[^>]+>/g, '').replace(/\(.*?\)/g, '').trim();
+  v = v.split(/\s*[,;]\s*/)[0].trim();
+  return v && !/^[-–—?]*$/.test(v) ? v : null;
+}
+async function wikiInfobox(lang, title, keys) {
+  const r = await getJ(`https://${lang}.wikipedia.org/w/api.php?action=parse&page=${encodeURIComponent(title)}&prop=wikitext&section=0&format=json&origin=*&redirects=1`);
+  const t = r?.parse?.wikitext?.['*'] || '';
+  for (const k of keys) { const m = t.match(new RegExp('\\|\\s*' + k + '\\s*=\\s*([^\\n]*)', 'i')); const v = wikiClean(m?.[1]); if (v) return v; }
+  return null;
+}
+const ES_KEYS = ['entrenador', 'dt', 'director técnico'], EN_KEYS = ['manager', 'head_coach', 'coach', 'headcoach'];
+async function soccerCoach(name) {
+  const vars = [...new Set([name, name.replace(/\s*\(.*?\)\s*/g, ' ').trim(), name.replace(/[()]/g, '').trim()])];
+  let id = null;
+  for (const q of vars) {
+    for (const lang of ['en', 'es']) {
+      const s = await getJ(`${WD}action=wbsearchentities&search=${encodeURIComponent(q)}&language=${lang}&type=item&limit=8`);
+      const c = (s?.search || []).find((x) => /football|fútbol|futebol|soccer|club/i.test(x.description || '') && !/women|femen|youth|juvenil|reserve|under-|sub-\d|national|season|temporada/i.test(x.description || ''));
+      if (c) { id = c.id; break; }
+    }
+    if (id) break;
+  }
+  if (id) {
+    const e = (await getJ(`${WD}action=wbgetentities&ids=${id}&props=claims|sitelinks`))?.entities?.[id];
+    const es = e?.sitelinks?.eswiki?.title, en = e?.sitelinks?.enwiki?.title;
+    let v = (es && (await wikiInfobox('es', es, ES_KEYS))) || (en && (await wikiInfobox('en', en, EN_KEYS)));
+    if (v) return v;
+    const cl = (e?.claims?.P286 || []).filter((c) => !c.qualifiers?.P582 && c.mainsnak?.datavalue);
+    cl.sort((a, b) => String(b.qualifiers?.P580?.[0]?.datavalue?.value?.time || '').localeCompare(String(a.qualifiers?.P580?.[0]?.datavalue?.value?.time || '')));
+    const pid = cl[0]?.mainsnak.datavalue.value.id;
+    if (pid) { const L = (await getJ(`${WD}action=wbgetentities&ids=${pid}&props=labels&languages=es|en`))?.entities?.[pid]?.labels; v = (L?.es || L?.en)?.value; if (v) return v; }
+  }
+  const s = await getJ(`https://es.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(vars[1] + ' club de fútbol')}&srlimit=1&format=json&origin=*`);
+  const title = s?.query?.search?.[0]?.title;
+  return title ? wikiInfobox('es', title, ES_KEYS) : null;
+}
+function teamCoach(path, id, name) {
+  if (!path.startsWith('soccer')) {
+    const r = need('roster', id, `${espnBase(path)}/teams/${id}/roster`);
+    if (r === undefined) return undefined;
+    const c = r?.coach?.[0]; return c ? `${c.firstName || ''} ${c.lastName || ''}`.trim() : null;
+  }
+  const k = path + id;
+  if (k in COACH) return COACH[k];
+  try { const c = JSON.parse(localStorage.getItem('coach:' + k) || 'null'); if (c && Date.now() - c.t < 3 * 864e5) return (COACH[k] = c.v); } catch {}
+  COACH[k] = undefined;
+  (async () => {
+    let v = null;
+    try { v = await soccerCoach(name); } catch {}
+    COACH[k] = v;
+    try { localStorage.setItem('coach:' + k, JSON.stringify({ t: Date.now(), v })); } catch {}
+    rerenderDetail();
+  })();
+  return undefined;
+}
 function viewTeam() {
   const { sk, id } = S.team, path = ESPN[sk];
   const top = `<div class="dtop"><button class="icon-btn" data-act="back">‹</button><b>Equipo</b></div>`;
@@ -989,6 +1053,7 @@ function viewTeam() {
   const sum = String(T.standingSummary || '').replace(/^(\d+)(st|nd|rd|th) in /, '$1.º en ');
   const head = `<div class="card thead">${logoImg(T.logo, 'tlogo')}<div class="tinfo"><h2>${esc(T.displayName)}</h2>
       <div class="mut">${esc(LG_META[sk]?.[0] || '')}${sum ? ' · ' + esc(sum) : ''}${T.recordSummary ? ` · ${esc(T.recordSummary)} (${soccer ? 'G-E-P' : 'G-P'})` : ''}</div>
+      ${((c) => (c ? `<div class="tcoach"><span class="mut">Entrenador</span> <b>${esc(c)}</b></div>` : c === undefined ? '<div class="mut tiny">Buscando entrenador…</div>' : ''))(teamCoach(path, id, T.displayName))}
       ${next.find((e) => e.home.id === id)?.venue ? `<div class="mut tiny">🏟 ${esc(next.find((e) => e.home.id === id).venue)}</div>` : ''}</div>
     <div class="tpn">${done[0] ? `<div><span class="mut tiny">Último partido</span>${mrowT(done[0])}</div>` : ''}${next[0] ? `<div><span class="mut tiny">Próximo partido</span>${mrowT(next[0])}</div>` : ''}</div></div>`;
   // Calendario: jugados / próximos, de 10 en 10

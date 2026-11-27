@@ -685,3 +685,4 @@ table.stb{width:100%;border-collapse:collapse;font-size:14px;white-space:nowrap}
 .tmt span{color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.tmt .mut span,.tmt .mut b{color:var(--mut)}
 .tmt b{color:var(--ink)}
 .thead,.tgrid>.card{min-width:0}
+.tcoach{margin:4px 0;font-size:15px}.tcoach b{margin-left:4px}
