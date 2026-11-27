@@ -645,3 +645,43 @@ table.bxt{width:100%;border-collapse:collapse;font-size:14px;white-space:nowrap}
 .bkl{fill:none;stroke-width:2.5;vector-effect:non-scaling-stroke}.bkl.up{stroke:var(--good)}.bkl.dn{stroke:var(--bad)}
 .bka{opacity:.12}.bka.up{fill:var(--good)}.bka.dn{fill:var(--bad)}
 .bankf{display:flex;justify-content:space-between;margin-top:4px}
+/* Página del equipo */
+.tb.click{cursor:pointer}.tb.click:hover b{color:var(--acc)}
+.thead{display:grid;grid-template-columns:auto 1fr auto;gap:18px;align-items:center}
+.tlogo{width:92px;height:92px;object-fit:contain}
+.tinfo h2{margin:0 0 4px;font-size:30px}
+.tpn{display:grid;grid-template-columns:1fr 1fr;gap:10px;min-width:0}
+.tpn>div{background:var(--surf2);border-radius:12px;padding:8px 10px;min-width:260px}
+.tgrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.6fr);gap:14px;margin-top:14px;align-items:start}
+.tcal .seg{margin:8px 0}
+.tpg{display:flex;gap:6px}.tpg button{background:var(--surf2);border:0;color:var(--ink);border-radius:8px;width:30px;height:28px;cursor:pointer}.tpg button:disabled{opacity:.35}
+.tmr{display:grid;grid-template-columns:62px 1fr 26px;gap:8px;align-items:center;padding:8px 2px;border-bottom:1px solid var(--edge)}
+.tmr.click{cursor:pointer}.tmr.click:hover{background:var(--surf2)}
+.tmt>div{display:grid;grid-template-columns:20px 1fr auto;gap:8px;align-items:center;font-size:14px;padding:1px 0}
+.tmt img,.tmt .nologo{width:20px;height:20px;object-fit:contain}
+.tres{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:6px;font-size:11px;font-weight:900}
+.tres.W{background:var(--good);color:#06200f}.tres.D{background:#9aa0a6;color:#111}.tres.L{background:var(--bad);color:#fff}
+.ttabs{margin-bottom:12px}
+.tgh{margin:12px 0 4px}
+table.stb{width:100%;border-collapse:collapse;font-size:14px;white-space:nowrap}
+.stb th{color:var(--mut);font-size:12px;font-weight:700;padding:6px 6px;text-align:center}.stb th.tl,.stb td.tl{text-align:left}
+.stb td{padding:6px;text-align:center;border-top:1px solid var(--edge)}
+.stb td.zone{box-shadow:inset 3px 0 0 var(--zc)}
+.stb tr.me td{background:var(--acc-soft)}.stb tr.me .tlink span{color:var(--acc);font-weight:800}
+.tlink{display:inline-flex;align-items:center;gap:8px;background:none;border:0;color:var(--ink);font:inherit;cursor:pointer;padding:0}
+.tlink img,.tlink .nologo{width:20px;height:20px;object-fit:contain}.tlink:hover span{color:var(--acc)}
+.frm{display:inline-flex;gap:2px}.frm i{font-style:normal;width:18px;height:18px;display:grid;place-items:center;border-radius:4px;font-size:10px;font-weight:900}
+.frm i.W{background:var(--good);color:#06200f}.frm i.D{background:#9aa0a6;color:#111}.frm i.L{background:var(--bad);color:#fff}
+.zleg{display:flex;flex-wrap:wrap;gap:12px;margin-top:10px;font-size:12px;color:var(--mut)}.zleg i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+.ptrk{width:100%;height:auto;display:block}
+.ptrk .pg{stroke:var(--edge);stroke-dasharray:4 5}.ptrk .pt{fill:var(--mut);font-size:12px;font-family:var(--font)}
+.ptrk .pv{stroke:var(--mut);opacity:.5}.ptrk .pl{fill:none;stroke:var(--acc);stroke-width:2.5}
+.ptrk .pd{cursor:pointer;stroke:var(--bg);stroke-width:2}.ptrk .pd.W{fill:var(--good)}.ptrk .pd.D{fill:#9aa0a6}.ptrk .pd.L{fill:var(--bad)}.ptrk .pd.on{stroke:#fff}
+.ptsel{display:flex;justify-content:space-between;align-items:center;margin:8px 0}.ptsel button{background:var(--surf2);border:0;color:var(--acc);font-size:20px;border-radius:8px;width:36px;height:32px;cursor:pointer}.ptsel button:disabled{opacity:.3}
+.ptbox{background:var(--surf2);border-radius:12px;padding:10px;text-align:center;border-top:3px solid var(--mut)}.ptbox.W{border-top-color:var(--good)}.ptbox.L{border-top-color:var(--bad)}
+.ptm{display:flex;justify-content:center;align-items:center;gap:10px;margin-top:6px;font-size:18px}.ptm img,.ptm .nologo{width:28px;height:28px;object-fit:contain}
+@media (max-width:920px){.tgrid{grid-template-columns:minmax(0,1fr)}.thead{grid-template-columns:auto 1fr}.tpn{grid-column:1/-1;grid-template-columns:1fr}.tpn>div{min-width:0}}
+@media (max-width:560px){.tlogo{width:60px;height:60px}.tinfo h2{font-size:22px}}
+.tmt span{color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.tmt .mut span,.tmt .mut b{color:var(--mut)}
+.tmt b{color:var(--ink)}
+.thead,.tgrid>.card{min-width:0}
