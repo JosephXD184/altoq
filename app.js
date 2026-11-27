@@ -1,5 +1,5 @@
 // ALTOQ · login con Google (Firebase), cuotas en tiempo real (The Odds API) y detector de valor (EV+).
-import { modelFor, pendingReason, summaryFor, logPrediction, preLogged, settleResults, registryStats } from './model.js?v=33';
+import { modelFor, pendingReason, summaryFor, logPrediction, preLogged, settleResults, registryStats } from './model.js?v=34';
 const CFG = window.RUSHTOP_CONFIG || {};
 const TZ = 'America/Lima';
 const $ = (s) => document.querySelector(s);
@@ -474,7 +474,8 @@ const dayOf = (ev) => (homeFirst(ev) ? limaDay(ev.commence_time) : nightKey(ev.c
 const todayKey = () => (S.liga === 'fc' ? limaDay(Date.now()) : nightKey(Date.now()));
 const addDays = (k, n) => limaDay(keyDate(k).getTime() + n * 864e5);
 const dayLabel = (k) => { const d = Math.round((keyDate(k) - keyDate(todayKey())) / 864e5); return d === 0 ? 'Hoy' : d === 1 ? 'Mañana' : d === -1 ? 'Ayer' : `${cap(wd(k, 'short'))} ${dnum(k)} ${monthOf(k).slice(0, 3)}`; };
-const DAY_MIN = -1, DAY_MAX = 6;
+const DAY_MIN = -60, DAY_MAX = 6; // hacia atrás: los días viejos se cargan al llegar a ellos
+S.pastDays = new Set();
 const mfavKey = () => 'mfavs:' + (S.user?.uid || 'anon');
 const getMFavs = () => new Set(store.get(mfavKey(), []));
 S.lv = { tab: 'all', filter: '', odds: store.get('lvOdds', false), closed: {}, feat: 0 };
@@ -547,7 +548,7 @@ function lvRow(a, favs, opt = {}) {
     if (pa.includes(s)) c.push('pa');
     return c.join(' ');
   };
-  const [t1, t2] = ord(ev, 'away', 'home'), pv = (s) => `<span class="lpx ${cls(s)}" ${pa.includes(s) ? 'title="Pago anticipado cobrado"' : ''}>${pa.includes(s) ? '<em class="pab">PA</em>' : ''}${res === s ? '<em class="wck">✓</em>' : ''}<i>${s === 'home' ? 'L' : s === 'away' ? 'V' : 'X'}</i> ${pp?.[s] != null ? pctEs(pp[s]) : '–'}</span>`;
+  const [t1, t2] = ord(ev, 'away', 'home'), pv = (s) => `<span class="lpx ${cls(s)}" ${pa.includes(s) ? 'title="Pago anticipado cobrado"' : ''}>${pa.includes(s) ? '<em class="pab">PA</em>' : ''}<i>${s === 'home' ? 'L' : s === 'away' ? 'V' : 'X'}</i> ${pp?.[s] != null ? pctEs(pp[s]) : '–'}</span>`;
   const draw = pp ? `<span class="lps">${pv(t1)}${pp.draw != null ? pv('draw') : ''}${pv(t2)}</span>` : '';
   const oddsDef = homeFirst(ev) ? [['1', L.mlHome], ['X', L.mlDraw], ['2', L.mlAway]] : [[ev.away_abbr, L.mlAway], [ev.home_abbr, L.mlHome]];
   const odds = S.lv.odds && st !== 'post' ? `<div class="lodds">${oddsDef.map(([k, v]) => `<span><i>${esc(k)}</i>${v ? fmtOdd(v) : '–'}</span>`).join('')}</div>` : '';
@@ -593,7 +594,7 @@ function viewHoy() {
   } else {
     const groups = groupBy(list);
     body = groups.map(([sk, rows]) => lvGroup(sk, rows, favs, { day: LV.tab === 'fav' })).join('')
-      || `<div class="lempty mut">${!S.updated ? 'Cargando partidos…' : LV.tab === 'fav' ? 'Toca la ☆ de un partido para guardarlo aquí.' : LV.filter ? 'No hay partidos con este filtro.' : `No hay partidos ${k === today ? 'hoy' : 'este día'}.`}</div>`;
+      || `<div class="lempty mut">${!S.updated || S.pastBusy ? 'Cargando partidos…' : LV.tab === 'fav' ? 'Toca la ☆ de un partido para guardarlo aquí.' : LV.filter ? 'No hay partidos con este filtro.' : `No hay partidos ${k === today ? 'hoy' : 'este día'}.`}</div>`;
   }
   const filt = S.liga === 'fc' && S.fc !== 'all' && LV.tab !== 'comps' ? `<div class="lnight"><button class="lchip on" data-lcomp="all">${esc(LG_META[S.fc]?.[0] || '')} ✕</button></div>` : '';
   const left = `<div class="card lvmain">
@@ -748,7 +749,7 @@ function viewBoleto() {
       <div><b>${esc(x.pick)}</b><div class="mut tiny">${esc(x.game)} · ${esc(x.market)}</div>
         <div class="mut tiny">${x.pModel != null ? `modelo ${pctEs(x.pModel)}` : 'sin prob. del modelo'} · ${x.price ? `cuota ${fmtOdd(x.price)}${x.book ? ' (' + esc(x.book) + ')' : ''}` : 'sin cuota'}</div></div>
       <label class="legodd"><span class="mut tiny">Cuota</span><input inputmode="decimal" placeholder="—" value="${x.price ? String(x.price).replace('.', ',') : ''}" data-legodd="${i}"></label>
-      ${mode === 'single' ? `<label class="legodd"><span class="mut tiny">Importe</span><input inputmode="decimal" placeholder="0" value="${x.stake || ''}" data-legstake="${i}"></label>` : ''}
+      ${mode === 'single' || s.length === 1 ? `<label class="legodd"><span class="mut tiny">Importe</span><input inputmode="decimal" placeholder="0" value="${x.stake || ''}" data-legstake="${i}"></label>` : ''}
       <button class="x" data-del="${i}" aria-label="Quitar">×</button></div>`).join('');
   let slipHtml;
   if (!s.length) slipHtml = `<div class="card empty">Tu boleto está vacío. Agrega selecciones desde “Props”, “Picks” o la página de un partido.</div>`;
@@ -781,6 +782,8 @@ function viewBoleto() {
   return `<div class="bhead"><div><h2 style="margin:0">Boleto</h2><span class="mut">${s.length} selecci${s.length === 1 ? 'ón' : 'ones'}${s.length > 1 ? ' · ' + (mode === 'combo' ? 'combinada' : 'sencillas') : ''}</span></div>${modeSeg}</div>
     ${slipHtml}${viewBets()}`;
 }
+// Fecha de la apuesta: si el partido ya empezó o se jugó (apuesta registrada tarde), la del partido; así la banca queda en orden
+const betWhen = (legs) => Math.min(Date.now(), ...legs.map((l) => new Date(l.time).getTime()).filter((t) => isFinite(t)));
 function registerBet(type) {
   const s = getSlip(); if (!s.length) return;
   const bets = getBets();
@@ -788,11 +791,11 @@ function registerBet(type) {
     const stake = +String(S.regStake || '').replace(',', '.') || 0;
     const odds = parseOdd(S.regOdds) || (s.every((x) => x.price) ? Math.round(prod(s.map((x) => x.price)) * 100) / 100 : null);
     if (!stake) { alert('Pon el importe que apostaste.'); return; }
-    bets.unshift({ id: 'b' + Date.now(), date: Date.now(), type: 'combo', legs: s, stake, odds });
+    bets.unshift({ id: 'b' + Date.now(), date: betWhen(s), type: 'combo', legs: s, stake, odds });
   } else {
     const legs = s.filter((x) => +String(x.stake || '').replace(',', '.') > 0);
     if (!legs.length) { alert('Pon el importe en al menos una selección.'); return; }
-    for (const x of legs) bets.unshift({ id: 'b' + Date.now() + Math.random().toString(36).slice(2, 6), date: Date.now(), type: 'single', legs: [x], stake: +String(x.stake).replace(',', '.'), odds: x.price || null });
+    for (const x of legs) bets.unshift({ id: 'b' + Date.now() + Math.random().toString(36).slice(2, 6), date: betWhen([x]), type: 'single', legs: [x], stake: +String(x.stake).replace(',', '.'), odds: x.price || null });
   }
   setBets(bets); setSlip([]); S.regStake = S.regOdds = ''; render();
 }
@@ -876,6 +879,23 @@ function betStats() {
   }
   return { n: bets.length, won, lost, pend, pendStake, staked, net: ret - staked, roi: staked ? (ret - staked) / staked : null, noOdds: bets.filter((b) => b.result === 'won' && !b.odds).length };
 }
+// Gráfica de la banca: bankroll inicial + resultado de cada apuesta cerrada, en orden de fecha del partido
+function bankChart() {
+  const pts = getBets().map((b) => ({ b, s: betState(b) })).filter((x) => x.s.won || x.s.lost).sort((x, y) => x.b.date - y.b.date);
+  if (!pts.length) return '';
+  let v = bankroll();
+  const ser = [{ d: pts[0].b.date, v }];
+  for (const { b, s } of pts) { v += s.won ? (b.odds ? b.stake * b.odds : b.stake) - b.stake : -b.stake; ser.push({ d: b.date, v, won: s.won }); }
+  const W = 640, Hh = 170, lo = Math.min(...ser.map((p) => p.v)), hi = Math.max(...ser.map((p) => p.v)), pad = (hi - lo) * 0.1 || hi * 0.05 || 1;
+  const x = (i) => 8 + (i / Math.max(1, ser.length - 1)) * (W - 16), y = (val) => 8 + (1 - (val - lo + pad) / (hi - lo + 2 * pad)) * (Hh - 16);
+  const d = ser.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(p.v).toFixed(1)}`).join(' ');
+  const up = v >= bankroll();
+  const fd = (t) => new Date(t).toLocaleDateString('es-PE', { day: 'numeric', month: 'short', timeZone: TZ });
+  return `<div class="bankc"><div class="bankh"><span class="mut tiny">Banca</span><b class="${up ? 'good' : 'bad'}">${money(v)}</b></div>
+    <svg viewBox="0 0 ${W} ${Hh}" preserveAspectRatio="none" class="bankg"><line x1="0" x2="${W}" y1="${y(bankroll())}" y2="${y(bankroll())}" class="bk0"/>
+      <path d="${d} L${x(ser.length - 1)},${Hh} L${x(0)},${Hh} Z" class="bka ${up ? 'up' : 'dn'}"/><path d="${d}" class="bkl ${up ? 'up' : 'dn'}"/></svg>
+    <div class="bankf mut tiny"><span>${fd(ser[0].d)}</span><span>${ser.length - 1} apuestas cerradas</span><span>${fd(ser[ser.length - 1].d)}</span></div></div>`;
+}
 function viewBets() {  const bets = getBets(); if (!bets.length) return '';
   const rows = bets.map((b) => {
     const { live, lost, won, pNow } = betState(b);
@@ -905,7 +925,7 @@ function viewPerfil() {
   return `<h2>Perfil</h2>
     <div class="card profile">${u.photo ? `<img src="${esc(u.photo)}" alt="">` : ''}<div><b>${esc(u.name || 'Invitado')}</b><div class="mut tiny">${esc(u.email || 'Invitado (sin cuenta de Google)')}</div></div></div>
     <div class="card" style="margin-top:10px"><label>Bankroll<br><input id="bankIn" type="number" min="0" value="${bankroll()}" style="margin-top:8px;font:inherit;background:var(--surf2);color:var(--ink);border:1px solid var(--edge);border-radius:8px;padding:8px;width:160px"></label></div>
-    <div class="card" style="margin-top:10px"><h4>MIS RESULTADOS</h4>
+    <div class="card" style="margin-top:10px"><h4>MIS RESULTADOS</h4>${bankChart()}
       ${bs.n ? `<div class="pnl"><div class="card"><span class="mut tiny">Ganancia neta</span><b class="${bs.net > 0 ? 'good' : bs.net < 0 ? 'bad' : ''}">${bs.net >= 0 ? '+' : '−'}${money(Math.abs(bs.net))}</b></div><div class="card"><span class="mut tiny">ROI</span><b class="${bs.roi > 0 ? 'good' : bs.roi < 0 ? 'bad' : ''}">${bs.roi == null ? '–' : signed((bs.roi * 100).toFixed(1)) + ' %'}</b></div><div class="card"><span class="mut tiny">Ganadas / perdidas</span><b>${bs.won} / ${bs.lost}</b></div><div class="card"><span class="mut tiny">Pendientes</span><b>${bs.pend}</b></div></div>
       <p class="mut tiny">Apostado en apuestas cerradas: ${money(bs.staked)} · en juego o pendiente: ${money(bs.pendStake)}. Bankroll actual: <b>${money(bankroll() + bs.net)}</b> (inicial ${money(bankroll())} ${bs.net >= 0 ? '+' : '−'} ${money(Math.abs(bs.net))}).${bs.noOdds ? ` ${bs.noOdds} ganada(s) sin cuota registrada: cuentan sin ganancia.` : ''}</p>` : '<p class="mut tiny">Aún no registraste apuestas. Regístralas desde el Boleto y aquí verás tus ganancias y pérdidas.</p>'}
     </div>
@@ -1118,7 +1138,7 @@ function ganadorSection(a, ai) {
         <div><span class="mut">Valor esperado</span><b class="${ev_ == null ? '' : ev_ > 0 ? 'good' : 'bad'}">${ev_ == null ? 'N/D' : signed((ev_ * 100).toFixed(1)) + ' %'}</b></div>
         ${minOdd ? `<div><span class="mut">Cuota mínima</span><b>${fmtOdd(minOdd)}</b></div>` : ''}
       </div>
-      ${o ? `<div class="gfoot"><span class="tiny mut">${esc(ev.provider || 'Casa')}</span><button class="add ${added ? 'in' : ''}" data-add="${ai}|${mi}|${h2h.outcomes.indexOf(o)}">${added ? '✓ Boleto' : '+ Boleto'}</button></div>` : ''}
+      ${o ? `<div class="gfoot"><span class="tiny mut">${esc(ev.provider || 'Casa')}</span><button class="add ${added ? 'in' : ''}" data-add="${ai}|${mi}|${h2h.outcomes.indexOf(o)}">${added ? '✓ Boleto' : '+ Boleto'}</button></div>` : pr ? ((sp) => `<div class="gfoot"><span class="tiny mut">Sin cuota de la casa</span><button class="add ${inSlipSpec(sp) ? 'in' : ''}" data-gadd="${esc(sp)}">${inSlipSpec(sp) ? '✓ Boleto' : '+ Boleto'}</button></div>`)(gSpec(ev, 'h2h', side, '', '', '')) : ''}
     </div>`;
   }).join('');
   const head = pr ? `${esc(pr.model)}${pr.margin != null ? ` · ${esc(pr.margin >= 0 ? ev.home_abbr : ev.away_abbr)} por ${num1(Math.abs(pr.margin))} · ${num1(pr.homePts)}-${num1(pr.awayPts)}` : ''}${pr.xgHome != null ? ` · xG ${num1(pr.xgHome)}-${num1(pr.xgAway)}` : ''}`
@@ -3072,7 +3092,12 @@ document.addEventListener('click', (e) => {
   const t = e.target.closest('button,[data-open],[data-pl],[data-openpl]');
   if (!t) return;
   // Lista de partidos
-  if (t.dataset.lday) { S.calDay = addDays(S.calDay || todayKey(), +t.dataset.lday); if (S.lv.tab === 'fav') S.lv.tab = 'all'; return render(); }
+  if (t.dataset.lday) {
+    S.calDay = addDays(S.calDay || todayKey(), +t.dataset.lday); if (S.lv.tab === 'fav') S.lv.tab = 'all';
+    // más atrás de ayer: se piden los partidos de ese día
+    if (S.calDay < addDays(todayKey(), -1) && !S.pastDays.has(S.calDay)) { S.pastDays.add(S.calDay); S.pastBusy = true; load().finally(() => { S.pastBusy = false; render(); }); }
+    return render();
+  }
   if (t.dataset.lvtab) { S.lv.tab = t.dataset.lvtab; return render(); }
   if (t.dataset.lf) { S.lv.filter = S.lv.filter === t.dataset.lf ? '' : t.dataset.lf; return render(); }
   if (t.dataset.lodds) { S.lv.odds = !S.lv.odds; store.set('lvOdds', S.lv.odds); return render(); }
@@ -3190,7 +3215,9 @@ const recs = (c) => {
 async function fetchEspn() {
   // 7 noches desde hoy (+1 día para los partidos de madrugada de la última). En fútbol, todas las ligas y copas.
   // desde ayer (para ver los finalizados) hasta 7 noches adelante
-  const dates = Array.from({ length: 9 }, (_, i) => limaDay(Date.now() - 6 * 36e5 + (i - 1) * 864e5).replace(/-/g, ''));
+  const base = Array.from({ length: 9 }, (_, i) => limaDay(Date.now() - 6 * 36e5 + (i - 1) * 864e5));
+  // días pasados que el usuario abrió (y el siguiente, por los partidos de madrugada)
+  const dates = [...new Set([...base, ...[...S.pastDays].flatMap((k) => [k, addDays(k, 1)])])].map((d) => d.replace(/-/g, ''));
   const jobs = leagueKeys().flatMap((sk) => dates.map((d) => ({ sk, path: ESPN[sk], d })));
   const pages = await Promise.all(jobs.map((j) => fetch(`https://site.api.espn.com/apis/site/v2/sports/${j.path}/scoreboard?dates=${j.d}`).then((r) => (r.ok ? r.json() : { events: [] })).catch(() => ({ events: [] }))));
   const seen = new Set(), raw = [];

@@ -638,3 +638,10 @@ table.bxt{width:100%;border-collapse:collapse;font-size:14px;white-space:nowrap}
 .lpx.won{color:var(--good)}
 .lpx .wck{font-style:normal;font-weight:900;color:var(--good);margin-right:3px}
 .lpx .pab{font-style:normal;font-size:9px;font-weight:900;background:var(--good);color:#06200f;border-radius:4px;padding:0 3px;margin-right:4px;line-height:13px;display:inline-block;vertical-align:1px}
+/* Perfil: gráfica de la banca */
+.bankc{margin:6px 0 12px}.bankh{display:flex;align-items:baseline;gap:8px}.bankh b{font-size:20px}
+.bankg{width:100%;height:170px;display:block;margin-top:6px}
+.bk0{stroke:var(--mut);stroke-dasharray:4 4;opacity:.6}
+.bkl{fill:none;stroke-width:2.5;vector-effect:non-scaling-stroke}.bkl.up{stroke:var(--good)}.bkl.dn{stroke:var(--bad)}
+.bka{opacity:.12}.bka.up{fill:var(--good)}.bka.dn{fill:var(--bad)}
+.bankf{display:flex;justify-content:space-between;margin-top:4px}
