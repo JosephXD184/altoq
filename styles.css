@@ -633,3 +633,4 @@ table.bxt{width:100%;border-collapse:collapse;font-size:14px;white-space:nowrap}
 .mico{position:absolute;top:2px;transform:translateX(-50%);font-size:14px;line-height:18px}
 .mico.og{filter:grayscale(1) opacity(.7)}
 .mico.red{width:10px;height:14px;background:#e5383b;border-radius:2px;top:4px}
+.mico.pa{margin-left:18px;background:var(--good);color:#06200f;font-size:10px;font-weight:900;border-radius:5px;padding:0 4px;line-height:16px;top:3px;z-index:1}

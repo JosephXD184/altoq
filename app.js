@@ -1,5 +1,5 @@
 // ALTOQ · login con Google (Firebase), cuotas en tiempo real (The Odds API) y detector de valor (EV+).
-import { modelFor, pendingReason, summaryFor, logPrediction, preLogged, settleResults, registryStats } from './model.js?v=29';
+import { modelFor, pendingReason, summaryFor, logPrediction, preLogged, settleResults, registryStats } from './model.js?v=30';
 const CFG = window.RUSHTOP_CONFIG || {};
 const TZ = 'America/Lima';
 const $ = (s) => document.querySelector(s);
@@ -2614,17 +2614,28 @@ function momentumCard(ev) {
     const m = parseInt(k.clock?.displayValue) || 0, red = /red-card/.test(k.type.type);
     return `<span class="mico ${red ? 'red' : own ? 'og' : ''}" style="left:${(Math.min(m, N) / N) * 100}%" title="${esc((k.type?.text || '') + ' ' + (k.clock?.displayValue || ''))}">${red ? '' : '⚽'}</span>`;
   }).join('');
+  // Pago anticipado (fútbol): la primera vez que un equipo saca 2 goles de ventaja
+  const sc = { home: 0, away: 0 }, paF = {};
+  for (const k of (sum.keyEvents || []).filter((k) => k.scoringPlay && !k.shootout)) {
+    let s = String(k.team?.id) === String(ev.home_id) ? 'home' : String(k.team?.id) === String(ev.away_id) ? 'away' : null; if (!s) continue;
+    if (/own/i.test(k.type?.type || '')) s = s === 'home' ? 'away' : 'home';
+    sc[s]++;
+    const o = s === 'home' ? 'away' : 'home';
+    if (sc[s] - sc[o] >= 2 && !paF[s]) paF[s] = { min: k.clock?.displayValue || '', m: parseInt(k.clock?.displayValue) || 0, score: `${sc.home}-${sc.away}` };
+  }
+  const paIco = (side) => (paF[side] ? `<span class="mico pa" style="left:${(Math.min(paF[side].m, N) / N) * 100}%" title="Pago anticipado cobrado">PA</span>` : '');
+  const paNote = ['home', 'away'].filter((s) => paF[s]).map((s) => `<div class="eanote"><i>PA</i><span><b>Pago anticipado cobrado: ${esc(ev[s + '_abbr'])}</b> se puso 2 goles arriba (${esc(paF[s].score)}) en el ${esc(paF[s].min)}. En casas con pago anticipado, la apuesta a ganador de ${esc(ev[s + '_abbr'])} ya se paga aunque luego no gane.</span></div>`).join('');
   const logo = (s) => logoImg(teamLogo(ev, s), 'mlogo');
   return `<div class="card"><div class="ihead"><h4>MOMENTUM DEL PARTIDO</h4>${done ? '<span class="mut tiny">Final</span>' : `<span class="tag live">EN VIVO · ${esc(liveClock(ev))}</span>`}</div>
     <div class="momw"><div class="mlogos">${logo(s1)}${logo(s2)}</div><div>
-      <div class="micons">${icons(s1)}</div>
+      <div class="micons">${icons(s1)}${paIco(s1)}</div>
       <svg class="momc" viewBox="0 0 ${W} ${Hh}" preserveAspectRatio="none" role="img" aria-label="Momentum del partido">
         <defs><clipPath id="${id}a"><rect x="0" y="0" width="${W}" height="${Hh / 2}"/></clipPath><clipPath id="${id}b"><rect x="0" y="${Hh / 2}" width="${W}" height="${Hh / 2}"/></clipPath></defs>
         <rect x="0" y="0" width="${W}" height="${Hh / 2}" fill="${cols[0]}" opacity=".13"/><rect x="0" y="${Hh / 2}" width="${W}" height="${Hh / 2}" fill="${cols[1]}" opacity=".13"/>
         <path d="${d}" fill="${cols[0]}" clip-path="url(#${id}a)"/><path d="${d}" fill="${cols[1]}" clip-path="url(#${id}b)"/>
         <line x1="${x(45)}" x2="${x(45)}" y1="0" y2="${Hh}" class="cg"/><line x1="0" x2="${W}" y1="${y(0)}" y2="${y(0)}" class="ca"/></svg>
-      <div class="micons">${icons(s2)}</div></div></div>
-    <p class="mut tiny">Quién ataca más en cada momento: tiros (a puerta pesan más), córners, palos y fueras de juego de la narración de ESPN. Arriba ${esc(ev[s1 + '_abbr'])}, abajo ${esc(ev[s2 + '_abbr'])}. ⚽ = gol · ▮ rojo = expulsión.</p></div>`;
+      <div class="micons">${icons(s2)}${paIco(s2)}</div></div></div>${paNote}
+    <p class="mut tiny">Quién ataca más en cada momento: tiros (a puerta pesan más), córners, palos y fueras de juego de la narración de ESPN. Arriba ${esc(ev[s1 + '_abbr'])}, abajo ${esc(ev[s2 + '_abbr'])}. ⚽ = gol · ▮ rojo = expulsión · PA = pago anticipado (2 goles de ventaja).</p></div>`;
 }
 // NFL: mejor pasador de cada equipo al terminar
 function bestPassers(sum, ev, s1, s2) {
