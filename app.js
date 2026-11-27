@@ -1,5 +1,5 @@
 // ALTOQ · login con Google (Firebase), cuotas en tiempo real (The Odds API) y detector de valor (EV+).
-import { modelFor, pendingReason, summaryFor, logPrediction, preLogged, settleResults, registryStats } from './model.js?v=27';
+import { modelFor, pendingReason, summaryFor, logPrediction, preLogged, settleResults, registryStats } from './model.js?v=29';
 const CFG = window.RUSHTOP_CONFIG || {};
 const TZ = 'America/Lima';
 const $ = (s) => document.querySelector(s);
@@ -1027,7 +1027,8 @@ function booksCard(ev) {
   const j = need('xodds', ev.id, `https://sports.core.api.espn.com/v2/sports/${sp}/leagues/${lg}/events/${ev.id}/competitions/${ev.id}/odds?limit=50`);
   if (j === undefined) return `<div class="card"><h4>CUOTAS DE LAS CASAS</h4><p class="mut tiny">Cargando cuotas…</p></div>`;
   const uk = xoddsFor(ev); // Betano y casas de Reino Unido (tarea diaria de GitHub)
-  const espn = bookOdds(j), betano = uk.filter((b) => /betano/i.test(b.k)), others = uk.filter((b) => !/betano/i.test(b.k));
+  // Bet365 de ESPN se actualiza en vivo: con el partido empezado sus cuotas ya no son de antes del partido
+  const espn = bookOdds(j).filter((r) => ev.state === 'pre' || !/365/.test(r.name)), betano = uk.filter((b) => /betano/i.test(b.k)), others = uk.filter((b) => !/betano/i.test(b.k));
   const rows = [...betano, ...espn, ...others]; if (!rows.length) return '';
   const nShow = betano.length + espn.length || 3, allBk = S.detail.allBk, shown = allBk ? rows : rows.slice(0, Math.max(nShow, 3));
   const pr = ev.pred, soccer = isSoccerEv(ev);
@@ -1052,7 +1053,7 @@ function partidoTab(a, ai, liveEv) {
   const ev = a.ev, live = liveEv ? liveProbCard(liveEv) : '';
   const sum = need('sum', ev.id, `${espnBase(ev.path)}/summary?event=${ev.id}`);
   if (isGuest()) return ganadorSection(a, ai) + live + lockCard('El porqué del %, todas las salidas del modelo, historial, bajas, detalles y otros mercados');
-  if (ev.path.startsWith('soccer')) return ganadorSection(a, ai) + live + booksCard(ev) + historySection(ev) + detailsSection(ev) + soccerBajasSection(ev, sum) + soccerMarketsSection(a);
+  if (ev.path.startsWith('soccer')) return ganadorSection(a, ai) + live + (liveEv ? momentumCard(liveEv) : '') + booksCard(ev) + historySection(ev) + detailsSection(ev) + soccerBajasSection(ev, sum) + soccerMarketsSection(a);
   return ganadorSection(a, ai) + live + (liveEv ? courtCard(liveEv) : '') + booksCard(ev) + historySection(ev) + injuriesSection(ev, sum) + detailsSection(ev) + marketsSection(a, ai);
 }
 
@@ -2481,39 +2482,71 @@ function matchStatsCard(ev) {
 // ---------- NBA/NFL dentro del partido: ventaja minuto a minuto, cuartos y mejor jugador de cada equipo ----------
 const hexLum = (h) => (h && /^[0-9a-f]{6}$/i.test(h) ? [0, 2, 4].reduce((s, i) => s + parseInt(h.slice(i, i + 2), 16), 0) : 0);
 const teamCol = (t, alt) => { const c = [t?.color, t?.alternateColor].find((x) => hexLum(x) > 150); return c ? '#' + c : alt; };
-const EARLY = 20; // ventaja que activa el pago anticipado (NBA)
+// Pago anticipado: ventaja que lo activa (NBA +20, NFL +17)
+const isFootEv = (ev) => !!ev.path?.startsWith('football');
+const earlyOf = (ev) => (isFootEv(ev) ? 17 : 20);
+// Duración: NBA cuartos de 12 y prórrogas de 5 · NFL cuartos de 15 y prórroga de 10
+const perLen = (ev) => (isFootEv(ev) ? [15, 10] : [12, 5]);
+function gameT(ev, period, clock) {
+  const [q, ot] = perLen(ev), s = String(clock || '0');
+  const left = s.includes(':') ? +s.split(':')[0] + (+s.split(':')[1] || 0) / 60 : (parseFloat(s) || 0) / 60;
+  return period <= 4 ? (period - 1) * q + (q - left) : 4 * q + (period - 5) * ot + (ot - left);
+}
+const gameEnd = (ev, per) => { const [q, ot] = perLen(ev); return per <= 4 ? 4 * q : 4 * q + (per - 4) * ot; };
 // minuto de juego → "C3 5:23"
-const gameClock = (t) => { const reg = t < 48, per = reg ? Math.min(4, Math.floor(t / 12) + 1) : 5 + Math.floor((t - 48) / 5), left = reg ? per * 12 - t : 48 + (per - 4) * 5 - t; const s = Math.round(left * 60); return `${per <= 4 ? 'C' + per : 'P' + (per - 4)} ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
-function leadChart(sum, ev, sTop, cols) {
-  const comp = sum.header?.competitions?.[0], st = comp?.status || {};
-  const pts = [[0, 0]];
-  for (const p of sum.plays || []) {
-    if (p.homeScore == null || p.awayScore == null) continue;
-    const d = sTop === 'home' ? p.homeScore - p.awayScore : p.awayScore - p.homeScore;
-    const t = nbaT(p.period?.number || 1, p.clock?.displayValue);
-    if (d !== pts[pts.length - 1][1]) pts.push([t, d]);
-  }
-  if (pts.length < 2) return '';
+function gameClock(ev, t) {
+  const [q, ot] = perLen(ev), reg = t < 4 * q, per = reg ? Math.min(4, Math.floor(t / q) + 1) : 5 + Math.floor((t - 4 * q) / ot);
+  const left = reg ? per * q - t : 4 * q + (per - 4) * ot - t, s = Math.round(left * 60);
+  return `${per <= 4 ? 'C' + per : 'P' + (per - 4)} ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+// Jugada a jugada: NBA en sum.plays; NFL dentro de cada serie ofensiva (drives)
+const playsOf = (sum) => sum.plays || [...(sum.drives?.previous || []), ...(sum.drives?.current ? [sum.drives.current] : [])].flatMap((d) => d.plays || []);
+// Gráfica: marcador (ventaja) o probabilidad de ganar de ESPN. Arriba = equipo de arriba
+function leadChart(sum, ev, sTop, cols, mode) {
+  const st = sum.header?.competitions?.[0]?.status || {}, plays = playsOf(sum);
+  const tOf = (p) => gameT(ev, p.period?.number || 1, p.clock?.displayValue);
   const per = st.period || 4, done = st.type?.state === 'post';
-  const tNow = done ? (per <= 4 ? 48 : 48 + (per - 4) * 5) : nbaT(per, st.displayClock);
+  const tNow = done ? gameEnd(ev, per) : gameT(ev, per, st.displayClock);
+  const pts = [[0, 0]];
+  if (mode === 'wp') {
+    const at = new Map(plays.map((p) => [String(p.id), tOf(p)]));
+    for (const w of sum.winprobability || []) {
+      const t = at.get(String(w.playId)); if (t == null) continue;
+      const h = +w.homeWinPercentage, v = Math.round(((sTop === 'home' ? h : 1 - h) - 0.5) * 200) / 2; // −50…+50
+      pts.push([t, v]);
+    }
+    if (pts.length < 3) return '';
+  } else {
+    for (const p of plays) {
+      if (p.homeScore == null || p.awayScore == null) continue;
+      const d = sTop === 'home' ? p.homeScore - p.awayScore : p.awayScore - p.homeScore;
+      if (d !== pts[pts.length - 1][1]) pts.push([tOf(p), d]);
+    }
+    if (pts.length < 2) return '';
+  }
+  pts.sort((a, b) => a[0] - b[0]);
   pts.push([tNow, pts[pts.length - 1][1]]);
-  const tMax = Math.max(48, tNow), m = Math.max(5, Math.ceil(Math.max(...pts.map((p) => Math.abs(p[1]))) / 5) * 5);
-  const W = 640, Hh = 170, pr = 0, x = (t) => (t / tMax) * (W - pr), y = (v) => Hh / 2 - (v / m) * (Hh / 2 - 4);
-  let d = `M0,${y(0)}`; for (const [t, v] of pts) d += ` L${x(t).toFixed(1)},${y(v).toFixed(1)}`;
+  const EARLY = earlyOf(ev), [q, ot] = perLen(ev);
+  const tMax = Math.max(4 * q, tNow), m = mode === 'wp' ? 50 : Math.max(5, Math.ceil(Math.max(...pts.map((p) => Math.abs(p[1]))) / 5) * 5);
+  const W = 640, Hh = 170, x = (t) => (t / tMax) * W, y = (v) => Hh / 2 - (v / m) * (Hh / 2 - 4);
+  // el marcador va por escalones; la probabilidad, en línea
+  let d = `M0,${y(0)}`, prev = 0;
+  for (const [t, v] of pts) { d += mode === 'wp' ? ` L${x(t).toFixed(1)},${y(v).toFixed(1)}` : ` L${x(t).toFixed(1)},${y(prev).toFixed(1)} L${x(t).toFixed(1)},${y(v).toFixed(1)}`; prev = v; }
   d += ` L${x(tNow).toFixed(1)},${y(0)} Z`;
-  const marks = []; for (let t = 12; t < tMax; t += t < 48 ? 12 : 5) marks.push(t);
-  const id = 'lc' + ev.id;
-  // Pago anticipado: primer momento en que cada equipo llega a +20
+  const marks = []; for (let t = q; t < tMax; t += t < 4 * q ? q : ot) marks.push(t);
+  const id = 'lc' + ev.id + mode;
+  // Pago anticipado: primer momento en que cada equipo llega a la ventaja (en el gráfico del marcador)
   const early = [];
-  for (const sg of [1, -1]) { const h = pts.find((p) => p[1] * sg >= EARLY); if (h) early.push({ t: h[0], v: h[1], side: sg > 0 ? sTop : sTop === 'home' ? 'away' : 'home' }); }
-  return `<div class="leadw"><div class="leadbox"><svg class="leadc" viewBox="0 0 ${W} ${Hh}" preserveAspectRatio="none" role="img" aria-label="Ventaja en el marcador">
+  if (mode !== 'wp') for (const sg of [1, -1]) { const h = pts.find((p) => p[1] * sg >= EARLY); if (h) early.push({ t: h[0], v: h[1], side: sg > 0 ? sTop : sTop === 'home' ? 'away' : 'home' }); }
+  const ylab = mode === 'wp' ? ['100 %', '50 %', '100 %'] : [m, 0, m];
+  return `<div class="leadw"><div class="leadbox"><svg class="leadc" viewBox="0 0 ${W} ${Hh}" preserveAspectRatio="none" role="img" aria-label="${mode === 'wp' ? 'Probabilidad de ganar' : 'Ventaja en el marcador'}">
     <defs><clipPath id="${id}a"><rect x="0" y="0" width="${W}" height="${Hh / 2}"/></clipPath><clipPath id="${id}b"><rect x="0" y="${Hh / 2}" width="${W}" height="${Hh / 2}"/></clipPath></defs>
-    <rect x="0" y="0" width="${W - pr}" height="${Hh / 2}" fill="${cols[0]}" opacity=".13"/><rect x="0" y="${Hh / 2}" width="${W - pr}" height="${Hh / 2}" fill="${cols[1]}" opacity=".13"/>
+    <rect x="0" y="0" width="${W}" height="${Hh / 2}" fill="${cols[0]}" opacity=".13"/><rect x="0" y="${Hh / 2}" width="${W}" height="${Hh / 2}" fill="${cols[1]}" opacity=".13"/>
     <path d="${d}" fill="${cols[0]}" clip-path="url(#${id}a)"/><path d="${d}" fill="${cols[1]}" clip-path="url(#${id}b)"/>
     ${marks.map((t) => `<line x1="${x(t)}" x2="${x(t)}" y1="0" y2="${Hh}" class="cg"/>`).join('')}
-    <line x1="0" x2="${W - pr}" y1="${y(0)}" y2="${y(0)}" class="ca"/>${m >= EARLY ? [EARLY, -EARLY].map((v) => `<line x1="0" x2="${W}" y1="${y(v)}" y2="${y(v)}" class="cbar"/>`).join('') : ''}
-    </svg>${early.map((h) => `<i class="eadot" style="left:${(x(h.t) / W) * 100}%;top:${(y(h.v) / Hh) * 100}%" title="Pago anticipado"></i>`).join('')}</div><div class="leady"><span>${m}</span><span>0</span><span>${m}</span></div></div>
-    ${early.map((h) => `<div class="eanote"><i></i><span><b>Pago anticipado: ${esc(h.side === 'home' ? ev.home_abbr : ev.away_abbr)}</b> llegó a +${EARLY} en el ${esc(gameClock(h.t))}. En casas con pago anticipado, la apuesta a ganador de ${esc(h.side === 'home' ? ev.home_abbr : ev.away_abbr)} se cobra aunque luego pierda.</span></div>`).join('')}`;
+    <line x1="0" x2="${W}" y1="${y(0)}" y2="${y(0)}" class="ca"/>${mode !== 'wp' && m >= EARLY ? [EARLY, -EARLY].map((v) => `<line x1="0" x2="${W}" y1="${y(v)}" y2="${y(v)}" class="cbar"/>`).join('') : ''}
+    </svg>${early.map((h) => `<i class="eadot" style="left:${(x(h.t) / W) * 100}%;top:${(y(h.v) / Hh) * 100}%" title="Pago anticipado cobrado">PA</i>`).join('')}</div><div class="leady">${ylab.map((l) => `<span>${l}</span>`).join('')}</div></div>
+    ${early.map((h) => { const ab = esc(h.side === 'home' ? ev.home_abbr : ev.away_abbr); return `<div class="eanote"><i>PA</i><span><b>Pago anticipado cobrado: ${ab}</b> llegó a +${EARLY} en el ${esc(gameClock(ev, h.t))}. En casas con pago anticipado, la apuesta a ganador de ${ab} ya se paga aunque luego pierda.</span></div>`; }).join('')}`;
 }
 function courtCard(ev) {
   if (ev.state === 'pre' || isSoccerEv(ev) || !ev.path) return '';
@@ -2524,20 +2557,91 @@ function courtCard(ev) {
   const [s1, s2] = ord(ev, 'away', 'home'), other = (s) => (s === 'home' ? 'away' : 'home');
   const cols = courtCols(sum, ev);
   const done = comp.status?.type?.state === 'post';
-  // Gráfica de ventaja: arriba cuando gana el equipo de arriba
-  const chart = leadChart(sum, ev, s1, cols);
+  // Gráfico del marcador o de la probabilidad de ganar (ESPN)
+  const hasWp = (sum.winprobability || []).length > 2, mode = hasWp && S.detail.gmode === 'wp' ? 'wp' : 'score';
+  const chart = leadChart(sum, ev, s1, cols, mode);
   const when = new Date(ev.commence_time).toLocaleString('es-PE', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: TZ });
-  const key = (s, c) => `<span class="lkey"><i style="background:${c}"></i>${esc(s === 'home' ? ev.home_abbr : ev.away_abbr)}</span>`;
+  const ab = (s) => esc(s === 'home' ? ev.home_abbr : ev.away_abbr);
+  const key = (s, c) => `<span class="lkey"><i style="background:${c}"></i>${ab(s)}</span>`;
+  const gseg = hasWp ? `<div class="seg gseg"><button data-gmode="score" class="${mode === 'score' ? 'on' : ''}">Marcador</button><button data-gmode="wp" class="${mode === 'wp' ? 'on' : ''}">Prob. de ganar</button></div>` : '';
   // Cuartos
   const L = { home: (C.home?.linescores || []).map((l) => +l.displayValue || 0), away: (C.away?.linescores || []).map((l) => +l.displayValue || 0) };
   const n = Math.max(L.home.length, L.away.length);
   const qlab = (i) => (i < 4 ? 'C' + (i + 1) : 'P' + (i - 3));
   const qrow = (s) => `<tr><td>${logoImg(teamLogo(ev, s))}</td>${Array.from({ length: n }, (_, i) => { const v = L[s][i], o = L[other(s)][i]; return `<td class="${v > (o ?? 0) ? 'w' : ''}">${v ?? '–'}</td>`; }).join('')}<td class="t ${+C[s]?.score > +C[other(s)]?.score ? 'w' : ''}">${esc(C[s]?.score ?? '–')}</td></tr>`;
   const quarters = n ? `<table class="qtab"><tr><th></th>${Array.from({ length: n }, (_, i) => `<th>${qlab(i)}</th>`).join('')}<th>T</th></tr>${qrow(s1)}${qrow(s2)}</table>` : '';
+  const best = !done ? '' : isHoopEv(ev) ? bestPlayers(sum, ev, s1, s2) : isFootEv(ev) ? bestPassers(sum, ev, s1, s2) : '';
+  const note = mode === 'wp' ? `Probabilidad de ganar según ESPN, jugada a jugada: arriba ${ab(s1)}, abajo ${ab(s2)}.`
+    : `Ventaja en el marcador a lo largo del partido: arriba cuando gana ${ab(s1)}, abajo cuando gana ${ab(s2)}. Las líneas verdes marcan +${earlyOf(ev)} (pago anticipado).`;
   return `<div class="card"><div class="ihead"><h4>EL PARTIDO</h4>${done ? '<span class="mut tiny">Final</span>' : `<span class="tag live">EN VIVO · ${esc(liveClock(ev))}</span>`}</div>
-    ${chart ? `<div class="lkeys">${key(s1, cols[0])}${key(s2, cols[1])}</div>${chart}<div class="lcfoot mut tiny"><span>${esc(when)}</span><span>${done ? 'Final' : esc(liveClock(ev))}</span></div>` : ''}
-    ${quarters}${ev.path.startsWith('basketball') && done ? bestPlayers(sum, ev, s1, s2) : ''}
-    ${chart ? '<p class="mut tiny">Ventaja en el marcador a lo largo del partido: arriba cuando gana ' + esc(s1 === 'home' ? ev.home_abbr : ev.away_abbr) + ', abajo cuando gana ' + esc(s2 === 'home' ? ev.home_abbr : ev.away_abbr) + '. Datos de ESPN.</p>' : ''}</div>`;
+    ${quarters}${gseg}
+    ${chart ? `<div class="lkeys">${key(s1, cols[0])}${key(s2, cols[1])}</div>${chart}<div class="lcfoot mut tiny"><span>${esc(when)}</span><span>${done ? 'Final' : esc(liveClock(ev))}</span></div><p class="mut tiny">${note} Datos de ESPN.</p>` : ''}
+    ${best}</div>`;
+}
+// ---------- Fútbol: momentum del partido (quién ataca más en cada minuto) ----------
+// Peso de cada acción de ataque en la narración de ESPN
+const MOM_W = { 'shot-on-target': 3, 'shot-hit-woodwork': 3, 'shot-off-target': 2, 'shot-blocked': 1.5, 'corner-awarded': 1.5, offside: 0.5 };
+function momentumCard(ev) {
+  if (ev.state === 'pre' || !isSoccerEv(ev)) return '';
+  const sum = liveSum({ eventId: ev.id, path: ev.path });
+  if (!sum) return `<div class="card"><h4>MOMENTUM DEL PARTIDO</h4><p class="mut tiny">Cargando…</p></div>`;
+  const com = sum.commentary || []; if (com.length < 5) return '';
+  const [s1, s2] = ord(ev, 'away', 'home'), cols = courtCols(sum, ev);
+  const sideOf = (n) => (!n ? null : n === ev.home_team || nameSim(n, ev.home_team) >= 0.5 ? 'home' : n === ev.away_team || nameSim(n, ev.away_team) >= 0.5 ? 'away' : null);
+  const st = sum.header?.competitions?.[0]?.status || {}, done = st.type?.state === 'post';
+  const minOf = (c) => Math.floor((+(c.play?.clock?.value ?? c.time?.value) || 0) / 60);
+  const last = Math.max(0, ...com.map(minOf));
+  const tNow = done ? Math.max(90, last + 1) : Math.max(1, parseInt(st.displayClock) || last + 1);
+  const N = Math.max(90, tNow), raw = { home: new Array(N + 2).fill(0), away: new Array(N + 2).fill(0) };
+  for (const c of com) {
+    const ty = c.play?.type?.type || '', w = /^goal/.test(ty) ? 5 : MOM_W[ty]; if (!w) continue;
+    const s = sideOf(c.play?.team?.displayName); if (!s) continue;
+    raw[s][Math.min(N, minOf(c))] += w;
+  }
+  // suavizado: cada minuto suma lo de los 3 anteriores con menos peso
+  const K = [1, 0.6, 0.35, 0.15], vals = [];
+  for (let i = 0; i <= Math.min(N, tNow); i++) vals.push(K.reduce((a, k, j) => a + (i - j >= 0 ? k * (raw[s1][i - j] - raw[s2][i - j]) : 0), 0));
+  const mx = Math.max(1, ...vals.map(Math.abs));
+  const W = 640, Hh = 120, x = (t) => (t / N) * W, y = (v) => Hh / 2 - (v / mx) * (Hh / 2 - 3);
+  let d = `M0,${y(0)}`; vals.forEach((v, i) => { d += ` L${x(i + 0.5).toFixed(1)},${y(v).toFixed(1)}`; });
+  d += ` L${x(vals.length).toFixed(1)},${y(0)} Z`;
+  const id = 'mm' + ev.id;
+  // Goles y rojas arriba (equipo de arriba) o abajo
+  const icons = (side) => (sum.keyEvents || []).filter((k) => /goal|red-card/.test(k.type?.type || '') && !/disallowed/.test(k.type?.type || '')).map((k) => {
+    const own = /own/i.test(k.type?.type || '') || /own goal/i.test(k.text || '');
+    let s = String(k.team?.id) === String(ev.home_id) ? 'home' : String(k.team?.id) === String(ev.away_id) ? 'away' : null;
+    if (!s || s !== side) return '';
+    const m = parseInt(k.clock?.displayValue) || 0, red = /red-card/.test(k.type.type);
+    return `<span class="mico ${red ? 'red' : own ? 'og' : ''}" style="left:${(Math.min(m, N) / N) * 100}%" title="${esc((k.type?.text || '') + ' ' + (k.clock?.displayValue || ''))}">${red ? '' : '⚽'}</span>`;
+  }).join('');
+  const logo = (s) => logoImg(teamLogo(ev, s), 'mlogo');
+  return `<div class="card"><div class="ihead"><h4>MOMENTUM DEL PARTIDO</h4>${done ? '<span class="mut tiny">Final</span>' : `<span class="tag live">EN VIVO · ${esc(liveClock(ev))}</span>`}</div>
+    <div class="momw"><div class="mlogos">${logo(s1)}${logo(s2)}</div><div>
+      <div class="micons">${icons(s1)}</div>
+      <svg class="momc" viewBox="0 0 ${W} ${Hh}" preserveAspectRatio="none" role="img" aria-label="Momentum del partido">
+        <defs><clipPath id="${id}a"><rect x="0" y="0" width="${W}" height="${Hh / 2}"/></clipPath><clipPath id="${id}b"><rect x="0" y="${Hh / 2}" width="${W}" height="${Hh / 2}"/></clipPath></defs>
+        <rect x="0" y="0" width="${W}" height="${Hh / 2}" fill="${cols[0]}" opacity=".13"/><rect x="0" y="${Hh / 2}" width="${W}" height="${Hh / 2}" fill="${cols[1]}" opacity=".13"/>
+        <path d="${d}" fill="${cols[0]}" clip-path="url(#${id}a)"/><path d="${d}" fill="${cols[1]}" clip-path="url(#${id}b)"/>
+        <line x1="${x(45)}" x2="${x(45)}" y1="0" y2="${Hh}" class="cg"/><line x1="0" x2="${W}" y1="${y(0)}" y2="${y(0)}" class="ca"/></svg>
+      <div class="micons">${icons(s2)}</div></div></div>
+    <p class="mut tiny">Quién ataca más en cada momento: tiros (a puerta pesan más), córners, palos y fueras de juego de la narración de ESPN. Arriba ${esc(ev[s1 + '_abbr'])}, abajo ${esc(ev[s2 + '_abbr'])}. ⚽ = gol · ▮ rojo = expulsión.</p></div>`;
+}
+// NFL: mejor pasador de cada equipo al terminar
+function bestPassers(sum, ev, s1, s2) {
+  const top = {};
+  for (const t of sum.boxscore?.players || []) {
+    const side = String(t.team?.id) === String(ev.home_id) ? 'home' : String(t.team?.id) === String(ev.away_id) ? 'away' : null;
+    const P = t.statistics?.find((x) => x.name === 'passing'); if (!side || !P) continue;
+    const k = P.keys || [];
+    for (const a of P.athletes || []) {
+      const g = (n) => a.stats?.[k.indexOf(n)], yds = +g('passingYards') || 0;
+      if (!top[side] || yds > top[side].yds) top[side] = { yds, ca: g('completions/passingAttempts') || '–', td: +g('passingTouchdowns') || 0, int: +g('interceptions') || 0, rtg: +g('QBRating') || 0, name: a.athlete?.shortName || a.athlete?.displayName || '', img: a.athlete?.headshot?.href || '' };
+    }
+  }
+  const A = top[s1], B = top[s2]; if (!A || !B) return '';
+  const pl = (p, cls) => `<div class="bpp ${cls}"><div class="bpi">${p.img ? `<img src="${esc(p.img)}" alt="" loading="lazy">` : ''}</div><b>${esc(p.name)}</b></div>`;
+  const row = (l, a, b, low) => `<div class="bpr"><b class="${(low ? a < b : a > b) ? 'acc' : ''}">${a}</b><span>${l}</span><b class="${(low ? b < a : b > a) ? 'acc' : ''}">${b}</b></div>`;
+  return `<div class="bph mut tiny">MEJOR PASADOR DE CADA EQUIPO</div><div class="bp">${pl(A, 'l')}<div class="bps">${row('YDS', A.yds, B.yds)}${row('TD', A.td, B.td)}${row('INT', A.int, B.int, 1)}<div class="bpr"><b>${esc(A.ca)}</b><span>PASES</span><b>${esc(B.ca)}</b></div>${row('RTG', A.rtg, B.rtg)}</div>${pl(B, 'r')}</div>`;
 }
 const isHoopEv = (ev) => !!ev.path?.startsWith('basketball');
 // Colores de los dos equipos en el orden de la pantalla (si son muy oscuros, el alternativo)
@@ -2901,6 +3005,7 @@ document.addEventListener('click', (e) => {
   if (t.dataset.dteam) { S.detail.team = t.dataset.dteam; return render(); }
   if (t.dataset.cq != null) { S.detail.q = +t.dataset.cq; return render(); }
   if (t.dataset.allbk) { S.detail.allBk = !S.detail.allBk; return render(); }
+  if (t.dataset.gmode) { S.detail.gmode = t.dataset.gmode; return render(); }
   if (t.dataset.bx) { S.detail.bx = t.dataset.bx; return render(); }
   if (t.dataset.bxs) { S.detail.bxs = t.dataset.bxs; return render(); }
   // Props
